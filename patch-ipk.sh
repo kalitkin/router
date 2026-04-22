@@ -175,6 +175,7 @@ cat > "$TMPDIR/ctrl/prerm" << 'PRERM_EOF'
 [ -z "${IPKG_INSTROOT}" ] && {
     /etc/init.d/vpn-agent stop 2>/dev/null
     /etc/init.d/vpn-agent disable 2>/dev/null
+    /etc/init.d/xray-fetch disable 2>/dev/null
 }
 exit 0
 PRERM_EOF

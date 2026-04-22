@@ -241,10 +241,15 @@ if [ -n "$XRAY_BIN" ]; then
         progress "installing" 30 "Нужен PassWall для подписки..."
         wait $BYPASS_PID 2>/dev/null
         if auto_install_passwall; then
-            log "re-running apply after PassWall install..."
-            exec /usr/bin/vpn-apply.sh
+            # After install passwall must be findable now — do NOT exec (avoid loop)
+            PW2=$(find_passwall)
+            if [ -n "$PW2" ]; then
+                log "re-running apply after PassWall install..."
+                exec /usr/bin/vpn-apply.sh
+            fi
         fi
-        log "PassWall auto-install failed"
+        log "PassWall auto-install failed — no VPN client available"
+        progress "error" 0 "Не удалось установить PassWall"
         exit 1
     fi
 
