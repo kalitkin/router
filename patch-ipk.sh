@@ -135,22 +135,36 @@ if [ -n "$OWRT_ARCH" ]; then
         echo "src/gz passwall_luci ${SF}/releases/packages-${REL}/${OWRT_ARCH}/passwall_luci" \
             >> /etc/opkg/customfeeds.conf
 
+    progress "setup" 35 "Обновляем репозитории..."
+    echo "[$(date '+%H:%M:%S')] vpn-setup: opkg update" >> "$LOG"
+    opkg update >> "$LOG" 2>&1 || true
+    sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+
     if ! [ -f /etc/init.d/passwall ]; then
-        progress "setup" 35 "Обновляем репозитории..."
-        echo "[$(date '+%H:%M:%S')] vpn-setup: opkg update" >> "$LOG"
-        opkg update >> "$LOG" 2>&1 || true
-        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         progress "setup" 50 "Устанавливаем PassWall..."
         echo "[$(date '+%H:%M:%S')] vpn-setup: installing luci-app-passwall" >> "$LOG"
         if opkg install luci-app-passwall >> "$LOG" 2>&1; then
             echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall installed ok" >> "$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         else
-            echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall install failed — xray-fetch will retry on next boot" >> "$LOG"
+            echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall install failed" >> "$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         fi
     else
         echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall already installed" >> "$LOG"
+    fi
+
+    if ! command -v xray > /dev/null 2>&1; then
+        progress "setup" 70 "Устанавливаем xray-core..."
+        echo "[$(date '+%H:%M:%S')] vpn-setup: installing xray-core" >> "$LOG"
+        if opkg install xray-core >> "$LOG" 2>&1; then
+            echo "[$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok" >> "$LOG"
+        else
+            echo "[$(date '+%H:%M:%S')] vpn-setup: xray-core install failed" >> "$LOG"
+        fi
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    else
+        echo "[$(date '+%H:%M:%S')] vpn-setup: xray-core already installed" >> "$LOG"
     fi
 else
     echo "[$(date '+%H:%M:%S')] vpn-setup: cannot detect arch, skipping VPN client install" >> "$LOG"

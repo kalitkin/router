@@ -56,11 +56,19 @@ start() {
     if opkg install luci-app-passwall >> "$LOG" 2>&1; then
         echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall installed ok" >> "$LOG"
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-        return 0
+    else
+        echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall install failed" >> "$LOG"
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     fi
 
-    echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall install failed" >> "$LOG"
-    return 1
+    if ! command -v xray > /dev/null 2>&1; then
+        echo "[$(date '+%H:%M:%S')] xray-fetch: installing xray-core" >> "$LOG"
+        opkg install xray-core >> "$LOG" 2>&1 && \
+            echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok" >> "$LOG"
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    fi
+
+    return 0
 }
 
 stop() { return 0; }
