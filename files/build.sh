@@ -98,10 +98,10 @@ ok "xray: $XRAY_VERSION"
 
 if [ $ALL_ARCHS -eq 1 ]; then
     log "fetching all OpenWrt architectures..."
-    # Фильтруем только валидные архитектуры (содержат '_', не содержат '.' и '/')
+    # Lookahead/lookbehind — извлекаем имя между href=" и /"
+    # Только записи с '_' (все реальные arch имеют подчёркивание)
     ARCH_LIST=$(curl -fsSL "$OPENWRT_DL/releases/$OPENWRT_RELEASE/packages/" \
-        | grep -oP 'href="[a-z][a-z0-9_-]+/"' \
-        | tr -d 'href="/' \
+        | grep -oP '(?<=href=")[a-z][a-z0-9_-]+(?=/")' \
         | grep '_' \
         | sort -u)
 else
