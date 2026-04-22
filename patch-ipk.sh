@@ -81,9 +81,10 @@ Description: VPN Bot — подключение роутера к VPN через
  Поддерживает PassWall, auto-setup, bypass-листы, heartbeat, обновления конфига.
 CTRL
 
-# conffiles
+# conffiles — только конкретные файлы, не директории
 cat > "$TMPDIR/ctrl/conffiles" << 'CONF'
-/etc/vpn/
+/etc/vpn/bypass_ips.txt
+/etc/vpn/bypass_domains.txt
 CONF
 
 # postinst — минимальный, фоновый, без default_postinst
