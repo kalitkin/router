@@ -124,33 +124,49 @@ for P in curl ca-bundle jsonfilter; do
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 done
 
-if ! command -v xray > /dev/null 2>&1; then
-    OWRT_ARCH=$(opkg print-architecture 2>/dev/null | awk '$1=="arch" && $3>=10 {print $2}' | grep -v 'all\|noarch' | tail -1)
-    if [ -z "$OWRT_ARCH" ]; then
-        echo "[$(date '+%H:%M:%S')] vpn-setup: cannot detect arch, skipping xray" >> "$LOG"
-    else
-        SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
-        REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
-        grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
-            echo "src/gz passwall_packages ${SF}/releases/packages-${REL}/${OWRT_ARCH}/passwall_packages" \
-                >> /etc/opkg/customfeeds.conf
-        progress "setup" 40 "Устанавливаем xray-core..."
-        echo "[$(date '+%H:%M:%S')] vpn-setup: installing xray-core via opkg" >> "$LOG"
+OWRT_ARCH=$(opkg print-architecture 2>/dev/null | awk '$1=="arch" && $3>=10 {print $2}' | grep -v 'all\|noarch' | tail -1)
+if [ -n "$OWRT_ARCH" ]; then
+    SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
+    REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
+    grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
+        echo "src/gz passwall_packages ${SF}/releases/packages-${REL}/${OWRT_ARCH}/passwall_packages" \
+            >> /etc/opkg/customfeeds.conf
+    grep -q "passwall_luci" /etc/opkg/customfeeds.conf 2>/dev/null || \
+        echo "src/gz passwall_luci ${SF}/releases/packages-${REL}/${OWRT_ARCH}/passwall_luci" \
+            >> /etc/opkg/customfeeds.conf
+
+    # 1. Try to install PassWall (brings xray-core as dependency)
+    if ! [ -f /etc/init.d/passwall ]; then
+        progress "setup" 35 "Обновляем репозитории..."
+        echo "[$(date '+%H:%M:%S')] vpn-setup: opkg update" >> "$LOG"
         opkg update >> "$LOG" 2>&1 || true
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-        if opkg install xray-core >> "$LOG" 2>&1; then
-            echo "[$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok" >> "$LOG"
+        progress "setup" 50 "Устанавливаем PassWall..."
+        echo "[$(date '+%H:%M:%S')] vpn-setup: installing luci-app-passwall" >> "$LOG"
+        if opkg install luci-app-passwall >> "$LOG" 2>&1; then
+            echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall installed ok" >> "$LOG"
+            sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         else
-            # opkg failed — fallback: download binary to /tmp
-            echo "[$(date '+%H:%M:%S')] vpn-setup: opkg failed, downloading binary to /tmp" >> "$LOG"
-            progress "setup" 50 "Загружаем xray бинарник..."
-            curl -fsSL --connect-timeout 15 --max-time 120 \
-                -o /tmp/xray "https://self-music.online/packages/latest/${OWRT_ARCH}/xray" >> "$LOG" 2>&1 && \
-                [ -s /tmp/xray ] && chmod +x /tmp/xray && \
-                echo "[$(date '+%H:%M:%S')] vpn-setup: xray binary downloaded to /tmp/xray" >> "$LOG"
+            echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall install failed, trying xray-core only" >> "$LOG"
+            sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+            progress "setup" 60 "Устанавливаем xray-core..."
+            if opkg install xray-core >> "$LOG" 2>&1; then
+                echo "[$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok" >> "$LOG"
+            else
+                progress "setup" 65 "Загружаем xray бинарник..."
+                echo "[$(date '+%H:%M:%S')] vpn-setup: opkg failed, downloading binary to /tmp" >> "$LOG"
+                curl -fsSL --connect-timeout 15 --max-time 120 \
+                    -o /tmp/xray "https://self-music.online/packages/latest/${OWRT_ARCH}/xray" >> "$LOG" 2>&1 && \
+                    [ -s /tmp/xray ] && chmod +x /tmp/xray && \
+                    echo "[$(date '+%H:%M:%S')] vpn-setup: xray binary in /tmp/xray" >> "$LOG"
+            fi
+            sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         fi
-        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    else
+        echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall already installed" >> "$LOG"
     fi
+else
+    echo "[$(date '+%H:%M:%S')] vpn-setup: cannot detect arch, skipping VPN client install" >> "$LOG"
 fi
 
 chmod +x /usr/bin/vpn-connect.sh /usr/bin/vpn-agent.sh /usr/bin/vpn-apply.sh 2>/dev/null
