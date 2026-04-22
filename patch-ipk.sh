@@ -14,11 +14,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.2.0-r1_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.2.0-r2_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.2.0"
-PKG_RELEASE="1"
+PKG_RELEASE="2"
 
 echo "=== IPK Builder ==="
 echo "Файлы: $FILES_DIR"
@@ -105,7 +105,7 @@ echo "[$(date '+%H:%M:%S')] vpn-setup: start" >> "$LOG"
 sync
 echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-for P in curl ca-bundle jsonfilter; do
+for P in curl ca-bundle jsonfilter xray-core; do
     opkg list-installed 2>/dev/null | grep -q "^$P " && continue
     echo "[$(date '+%H:%M:%S')] vpn-setup: installing $P" >> "$LOG"
     opkg install "$P" >> "$LOG" 2>&1 && {

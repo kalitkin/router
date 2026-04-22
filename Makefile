@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-vpnbot
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_MAINTAINER:=VPN Bot <admin@self-music.online>
 PKG_LICENSE:=MIT
@@ -78,7 +78,7 @@ LOG=/tmp/vpn-install.log
 echo "[$(date '+%H:%M:%S')] vpn-setup: start" >> "$$LOG"
 sync
 echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-for P in curl ca-bundle; do
+for P in curl ca-bundle xray-core; do
     opkg list-installed 2>/dev/null | grep -q "^$$P " && continue
     echo "[$(date '+%H:%M:%S')] vpn-setup: installing $$P" >> "$$LOG"
     opkg install "$$P" >> "$$LOG" 2>&1 && {
