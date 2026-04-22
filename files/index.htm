@@ -1,0 +1,431 @@
+<%+header%>
+
+<style>
+:root {
+  --vpn-blue:    #2563eb;
+  --vpn-blue-dk: #1d4ed8;
+  --vpn-green:   #16a34a;
+  --vpn-yellow:  #ca8a04;
+  --vpn-red:     #dc2626;
+  --vpn-gray:    #64748b;
+  --radius:      10px;
+  --shadow:      0 2px 12px rgba(0,0,0,.10);
+}
+
+.vpn-wrap {
+  max-width: 420px;
+  margin: 0 auto;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* ── Заголовок ── */
+.vpn-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.vpn-header svg { flex-shrink: 0; }
+.vpn-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+.vpn-header p {
+  margin: 0;
+  font-size: .8rem;
+  color: var(--vpn-gray);
+}
+
+/* ── Статус ── */
+.vpn-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1.5px solid #e2e8f0;
+  background: #f8fafc;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+  transition: background .3s, border-color .3s;
+}
+.vpn-status.is-up     { background: #f0fdf4; border-color: #86efac; }
+.vpn-status.is-wait   { background: #fffbeb; border-color: #fcd34d; }
+.vpn-status.is-err    { background: #fef2f2; border-color: #fca5a5; }
+
+.vpn-status-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+  background: #cbd5e1;
+}
+.is-up   .vpn-status-dot { background: var(--vpn-green); box-shadow: 0 0 0 3px #bbf7d0; }
+.is-wait .vpn-status-dot { background: var(--vpn-yellow); box-shadow: 0 0 0 3px #fef9c3; }
+.is-err  .vpn-status-dot { background: var(--vpn-red);   box-shadow: 0 0 0 3px #fee2e2; }
+
+.vpn-status-body { flex: 1; min-width: 0; }
+.vpn-status-body b { display: block; font-size: .9rem; color: #1e293b; }
+.vpn-status-body span { font-size: .78rem; color: var(--vpn-gray); }
+
+/* ── OTP-ввод ── */
+.vpn-label {
+  display: block;
+  font-size: .8rem;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.vpn-otp {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.vpn-otp input {
+  width: 48px; height: 56px;
+  border: 2px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-align: center;
+  color: #1e293b;
+  background: #fff;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  -webkit-appearance: none;
+  caret-color: transparent;
+}
+.vpn-otp input:focus {
+  border-color: var(--vpn-blue);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.15);
+}
+.vpn-otp input.filled { border-color: #93c5fd; background: #eff6ff; }
+
+/* ── Кнопка ── */
+.vpn-btn {
+  width: 100%;
+  padding: 13px;
+  font-size: .95rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--vpn-blue);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background .15s, transform .1s, opacity .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.vpn-btn:hover:not(:disabled) { background: var(--vpn-blue-dk); }
+.vpn-btn:active:not(:disabled) { transform: scale(.98); }
+.vpn-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Спиннер внутри кнопки */
+.vpn-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: none;
+}
+.vpn-btn.loading .vpn-spinner { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Результат ── */
+.vpn-result {
+  display: none;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: .85rem;
+  margin-top: 12px;
+  border: 1.5px solid transparent;
+}
+.vpn-result.ok  { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.vpn-result.err { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+
+/* ── Шаги ── */
+.vpn-steps {
+  margin-top: 20px;
+  padding: 14px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius);
+  font-size: .82rem;
+  color: #475569;
+}
+.vpn-steps b {
+  display: block;
+  font-size: .8rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.vpn-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.vpn-step:last-child { margin-bottom: 0; }
+.vpn-step-num {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--vpn-blue);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.vpn-step-text { line-height: 1.4; }
+.vpn-step-text code {
+  background: #e2e8f0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: .78rem;
+  color: #1e293b;
+}
+</style>
+
+<div class="vpn-wrap">
+
+  <!-- Заголовок -->
+  <div class="vpn-header">
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+      <rect width="36" height="36" rx="9" fill="#2563eb"/>
+      <path d="M18 8l8 4v6c0 5-3.5 9.5-8 11-4.5-1.5-8-6-8-11v-6l8-4z" fill="white" opacity=".9"/>
+      <path d="M15 18l2 2 4-4" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h2>VPN Bot</h2>
+      <p>Подключение роутера к VPN через Telegram</p>
+    </div>
+  </div>
+
+  <!-- Статус -->
+  <div class="vpn-status" id="vpn-status">
+    <div class="vpn-status-dot"></div>
+    <div class="vpn-status-body">
+      <b>Проверка статуса...</b>
+      <span>&nbsp;</span>
+    </div>
+  </div>
+
+  <!-- Ввод кода -->
+  <label class="vpn-label" for="d0">Код из Telegram</label>
+  <div class="vpn-otp" id="vpn-otp">
+    <input type="tel" id="d0" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="one-time-code">
+    <input type="tel" id="d1" maxlength="1" inputmode="numeric" pattern="[0-9]">
+    <input type="tel" id="d2" maxlength="1" inputmode="numeric" pattern="[0-9]">
+    <input type="tel" id="d3" maxlength="1" inputmode="numeric" pattern="[0-9]">
+    <input type="tel" id="d4" maxlength="1" inputmode="numeric" pattern="[0-9]">
+    <input type="tel" id="d5" maxlength="1" inputmode="numeric" pattern="[0-9]">
+  </div>
+
+  <button class="vpn-btn" id="vpn-btn" onclick="doConnect()" disabled>
+    <div class="vpn-spinner" id="vpn-spinner"></div>
+    <span id="vpn-btn-text">Подключить</span>
+  </button>
+
+  <div class="vpn-result" id="vpn-result"></div>
+
+  <!-- Инструкция -->
+  <div class="vpn-steps">
+    <b>Как получить код</b>
+    <div class="vpn-step">
+      <div class="vpn-step-num">1</div>
+      <div class="vpn-step-text">Откройте Telegram-бот <code>@noose4bot</code></div>
+    </div>
+    <div class="vpn-step">
+      <div class="vpn-step-num">2</div>
+      <div class="vpn-step-text">Нажмите <b>«Подключить роутер»</b></div>
+    </div>
+    <div class="vpn-step">
+      <div class="vpn-step-num">3</div>
+      <div class="vpn-step-text">Нажмите <b>«Получить код»</b> и введите его выше</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var digits  = [0,1,2,3,4,5].map(function(i){ return document.getElementById('d'+i); });
+  var btn     = document.getElementById('vpn-btn');
+  var btnText = document.getElementById('vpn-btn-text');
+  var spinner = document.getElementById('vpn-spinner');
+  var result  = document.getElementById('vpn-result');
+  var status  = document.getElementById('vpn-status');
+
+  var URL_STATUS  = '<%=luci.dispatcher.build_url("admin/services/vpn/status")%>';
+  var URL_CONNECT = '<%=luci.dispatcher.build_url("admin/services/vpn/connect")%>';
+
+  // ── OTP-ввод ──
+
+  function getCode() {
+    return digits.map(function(d){ return d.value; }).join('');
+  }
+
+  function checkReady() {
+    var ok = getCode().length === 6;
+    btn.disabled = !ok;
+    return ok;
+  }
+
+  digits.forEach(function(inp, i) {
+    inp.addEventListener('keydown', function(e) {
+      // Backspace: очищаем текущий и переходим назад
+      if (e.key === 'Backspace') {
+        if (inp.value === '' && i > 0) {
+          digits[i-1].value = '';
+          digits[i-1].classList.remove('filled');
+          digits[i-1].focus();
+        } else {
+          inp.value = '';
+          inp.classList.remove('filled');
+        }
+        checkReady();
+        e.preventDefault();
+        return;
+      }
+      // Стрелки
+      if (e.key === 'ArrowLeft'  && i > 0)            { digits[i-1].focus(); e.preventDefault(); return; }
+      if (e.key === 'ArrowRight' && i < 5)             { digits[i+1].focus(); e.preventDefault(); return; }
+      // Enter
+      if (e.key === 'Enter') { doConnect(); return; }
+    });
+
+    inp.addEventListener('input', function() {
+      // Оставляем только цифру
+      var val = inp.value.replace(/\D/g, '');
+      if (val.length > 1) {
+        // Вставка нескольких цифр — распределяем по клеткам
+        for (var j = 0; j < val.length && (i+j) < 6; j++) {
+          digits[i+j].value = val[j];
+          digits[i+j].classList.toggle('filled', val[j] !== '');
+        }
+        var next = Math.min(i + val.length, 5);
+        digits[next].focus();
+      } else {
+        inp.value = val;
+        inp.classList.toggle('filled', val !== '');
+        if (val && i < 5) digits[i+1].focus();
+      }
+      checkReady();
+    });
+
+    inp.addEventListener('focus', function() { inp.select(); });
+  });
+
+  // ── Статус ──
+
+  function setStatus(cls, title, sub) {
+    status.className = 'vpn-status' + (cls ? ' '+cls : '');
+    status.querySelector('b').textContent = title;
+    status.querySelector('span').textContent = sub || '';
+  }
+
+  function updateStatus(d) {
+    if (d.vpn_up) {
+      setStatus('is-up', 'VPN работает',
+        'Device: ' + (d.device_id || '—').substring(0,8) + '…');
+    } else if (d.connected) {
+      setStatus('is-wait', 'Конфиг получен, VPN не запущен',
+        'Проверьте PassWall в меню Services.');
+    } else if (d.registered) {
+      setStatus('is-wait', 'Зарегистрирован — ожидание конфига…',
+        'Обычно занимает 5–30 секунд.');
+    } else {
+      setStatus('', 'Не подключён', 'Введите код из Telegram.');
+    }
+  }
+
+  (function checkStatus() {
+    var x = new XMLHttpRequest();
+    x.open('GET', URL_STATUS);
+    x.onload = function() {
+      try { updateStatus(JSON.parse(x.responseText)); }
+      catch(e) { setStatus('', 'Не подключён', ''); }
+    };
+    x.onerror = function() { setStatus('is-err', 'Ошибка связи', ''); };
+    x.send();
+  })();
+
+  // ── Подключение ──
+
+  function setLoading(on) {
+    btn.disabled = on;
+    btn.classList.toggle('loading', on);
+    spinner.style.display = on ? 'block' : 'none';
+    btnText.textContent   = on ? 'Подключение…' : 'Подключить';
+  }
+
+  function showResult(ok, html) {
+    result.style.display = 'block';
+    result.className = 'vpn-result ' + (ok ? 'ok' : 'err');
+    result.innerHTML = html;
+  }
+
+  window.doConnect = function() {
+    if (!checkReady()) return;
+    var code = getCode();
+
+    setLoading(true);
+    showResult(true, 'Отправка запроса…');
+
+    var x = new XMLHttpRequest();
+    x.open('POST', URL_CONNECT);
+    x.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    x.timeout = 30000;
+
+    x.onload = function() {
+      setLoading(false);
+      try {
+        var d = JSON.parse(x.responseText);
+        if (d.ok) {
+          showResult(true,
+            '<b>✓ Подключено!</b><br>Device: ' +
+            (d.device_id || '').substring(0,8) + '…<br>' +
+            'VPN агент запущен.');
+          setStatus('is-wait', 'Зарегистрирован — ожидание конфига…',
+            'Обычно занимает 5–30 секунд.');
+        } else {
+          showResult(false, '<b>Ошибка:</b> ' + (d.error || 'Неизвестная ошибка'));
+        }
+      } catch(e) {
+        showResult(false, 'Неверный ответ: ' + (x.responseText || e.message));
+      }
+    };
+
+    x.ontimeout = function() {
+      setLoading(false);
+      showResult(false, 'Таймаут — сервер не отвечает. Попробуйте ещё раз.');
+    };
+
+    x.onerror = function() {
+      setLoading(false);
+      showResult(false, 'Ошибка сети.');
+    };
+
+    x.send('code=' + encodeURIComponent(code));
+  };
+
+  // Фокус на первую клетку
+  digits[0].focus();
+})();
+</script>
+
+<%+footer%>

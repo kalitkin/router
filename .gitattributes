@@ -1,0 +1,10 @@
+# Shell-скрипты и init-файлы — всегда LF (иначе OpenWrt не запустит)
+*.sh        text eol=lf
+*.init      text eol=lf
+*.lua       text eol=lf
+*.htm       text eol=lf
+*.txt       text eol=lf
+Makefile    text eol=lf
+
+# Windows бинарники — без нормализации
+*.ipk       binary

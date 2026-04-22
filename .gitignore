@@ -1,0 +1,10 @@
+# Собранные IPK (генерируются скриптами)
+*.ipk
+
+# Временные файлы
+*.tmp
+*.log
+
+# Windows
+Thumbs.db
+desktop.ini
