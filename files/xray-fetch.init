@@ -22,10 +22,16 @@ fetch_arch() {
         | tail -1
 }
 
+passwall_present() {
+    [ -f /etc/init.d/passwall ] && return 0
+    [ -f /etc/init.d/passwall2 ] && return 0
+    return 1
+}
+
 start() {
-    # Primary install puts xray-core in /usr/bin/xray via opkg.
-    # This service is a safety net: if xray is missing after boot, restore it.
-    xray_present && return 0
+    # Safety net: if PassWall is missing after boot, try to install it.
+    # PassWall brings xray-core as dependency — no need to install xray separately.
+    passwall_present && return 0
 
     ARCH=$(fetch_arch)
     if [ -z "$ARCH" ]; then
@@ -33,33 +39,27 @@ start() {
         return 1
     fi
 
-    echo "[$(date '+%H:%M:%S')] xray-fetch: xray missing, restoring..." >> "$LOG"
+    echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall missing, installing..." >> "$LOG"
 
-    # Try opkg first — installs to /usr/bin/xray (persistent)
     SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
     REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
     grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
         echo "src/gz passwall_packages ${SF}/releases/packages-${REL}/${ARCH}/passwall_packages" \
             >> /etc/opkg/customfeeds.conf
+    grep -q "passwall_luci" /etc/opkg/customfeeds.conf 2>/dev/null || \
+        echo "src/gz passwall_luci ${SF}/releases/packages-${REL}/${ARCH}/passwall_luci" \
+            >> /etc/opkg/customfeeds.conf
+
     opkg update >> "$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-    if opkg install xray-core >> "$LOG" 2>&1; then
-        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (opkg → /usr/bin/xray)" >> "$LOG"
+
+    if opkg install luci-app-passwall >> "$LOG" 2>&1; then
+        echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall installed ok" >> "$LOG"
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         return 0
     fi
 
-    # opkg failed — download binary to /tmp as fallback
-    echo "[$(date '+%H:%M:%S')] xray-fetch: opkg failed, downloading to /tmp" >> "$LOG"
-    if curl -fsSL --connect-timeout 15 --max-time 120 \
-            -o /tmp/xray "${XRAY_CDN}/${ARCH}/xray" 2>> "$LOG" \
-        && [ -s /tmp/xray ]; then
-        chmod +x /tmp/xray
-        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (CDN → /tmp/xray)" >> "$LOG"
-        return 0
-    fi
-
-    rm -f /tmp/xray
-    echo "[$(date '+%H:%M:%S')] xray-fetch: all methods failed" >> "$LOG"
+    echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall install failed" >> "$LOG"
     return 1
 }
 

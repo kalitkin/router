@@ -135,7 +135,6 @@ if [ -n "$OWRT_ARCH" ]; then
         echo "src/gz passwall_luci ${SF}/releases/packages-${REL}/${OWRT_ARCH}/passwall_luci" \
             >> /etc/opkg/customfeeds.conf
 
-    # 1. Try to install PassWall (brings xray-core as dependency)
     if ! [ -f /etc/init.d/passwall ]; then
         progress "setup" 35 "Обновляем репозитории..."
         echo "[$(date '+%H:%M:%S')] vpn-setup: opkg update" >> "$LOG"
@@ -147,19 +146,7 @@ if [ -n "$OWRT_ARCH" ]; then
             echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall installed ok" >> "$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         else
-            echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall install failed, trying xray-core only" >> "$LOG"
-            sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-            progress "setup" 60 "Устанавливаем xray-core..."
-            if opkg install xray-core >> "$LOG" 2>&1; then
-                echo "[$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok" >> "$LOG"
-            else
-                progress "setup" 65 "Загружаем xray бинарник..."
-                echo "[$(date '+%H:%M:%S')] vpn-setup: opkg failed, downloading binary to /tmp" >> "$LOG"
-                curl -fsSL --connect-timeout 15 --max-time 120 \
-                    -o /tmp/xray "https://self-music.online/packages/latest/${OWRT_ARCH}/xray" >> "$LOG" 2>&1 && \
-                    [ -s /tmp/xray ] && chmod +x /tmp/xray && \
-                    echo "[$(date '+%H:%M:%S')] vpn-setup: xray binary in /tmp/xray" >> "$LOG"
-            fi
+            echo "[$(date '+%H:%M:%S')] vpn-setup: PassWall install failed — xray-fetch will retry on next boot" >> "$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         fi
     else

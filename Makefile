@@ -110,15 +110,7 @@ if [ -n "$$OWRT_ARCH" ]; then
             echo "[$$(date '+%H:%M:%S')] vpn-setup: PassWall installed ok" >> "$$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         else
-            echo "[$$(date '+%H:%M:%S')] vpn-setup: PassWall failed, trying xray-core" >> "$$LOG"
-            sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-            if opkg install xray-core >> "$$LOG" 2>&1; then
-                echo "[$$(date '+%H:%M:%S')] vpn-setup: xray-core ok" >> "$$LOG"
-            else
-                curl -fsSL --connect-timeout 15 --max-time 120 \
-                    -o /tmp/xray "https://self-music.online/packages/latest/$${OWRT_ARCH}/xray" >> "$$LOG" 2>&1 && \
-                    [ -s /tmp/xray ] && chmod +x /tmp/xray
-            fi
+            echo "[$$(date '+%H:%M:%S')] vpn-setup: PassWall install failed — xray-fetch will retry on next boot" >> "$$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         fi
     fi
