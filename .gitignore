@@ -8,3 +8,6 @@
 # Windows
 Thumbs.db
 desktop.ini
+
+# Claude Code context (local only)
+CLAUDE.md
