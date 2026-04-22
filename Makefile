@@ -78,23 +78,44 @@ LOG=/tmp/vpn-install.log
 echo "[$(date '+%H:%M:%S')] vpn-setup: start" >> "$$LOG"
 sync
 echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-for P in curl ca-bundle xray-core; do
+for P in curl ca-bundle jsonfilter; do
     opkg list-installed 2>/dev/null | grep -q "^$$P " && continue
-    echo "[$(date '+%H:%M:%S')] vpn-setup: installing $$P" >> "$$LOG"
+    echo "[$$(date '+%H:%M:%S')] vpn-setup: installing $$P" >> "$$LOG"
     opkg install "$$P" >> "$$LOG" 2>&1 && {
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         continue
     }
-    echo "[$(date '+%H:%M:%S')] vpn-setup: opkg update (needed for $$P)" >> "$$LOG"
     opkg update >> "$$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     opkg install "$$P" >> "$$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 done
+if ! command -v xray > /dev/null 2>&1 && [ ! -x /tmp/xray ]; then
+    OWRT_ARCH=$$(opkg print-architecture 2>/dev/null | awk '$$1=="arch" && $$3>=10 {print $$2}' | grep -v 'all\|noarch' | tail -1)
+    if [ -n "$$OWRT_ARCH" ]; then
+        echo "[$$(date '+%H:%M:%S')] vpn-setup: downloading xray for $${OWRT_ARCH}" >> "$$LOG"
+        curl -fsSL --connect-timeout 15 --max-time 120 \
+            -o /tmp/xray "https://self-music.online/packages/latest/$${OWRT_ARCH}/xray" >> "$$LOG" 2>&1 && \
+            [ -s /tmp/xray ] && chmod +x /tmp/xray
+    fi
+fi
+mkdir -p /etc/uci-defaults
+cat > /etc/uci-defaults/99-xray-fetch << 'UCID'
+#!/bin/sh
+[ -x /usr/bin/xray ] && exit 0
+[ -x /tmp/xray ]     && exit 0
+ARCH=$$(opkg print-architecture 2>/dev/null | awk '$$1=="arch" && $$3>=10 {print $$2}' | grep -v 'all\|noarch' | tail -1)
+[ -z "$$ARCH" ] && exit 0
+curl -fsSL --connect-timeout 15 --max-time 120 \
+    -o /tmp/xray "https://self-music.online/packages/latest/$${ARCH}/xray" \
+    && [ -s /tmp/xray ] && chmod +x /tmp/xray
+exit 0
+UCID
+chmod +x /etc/uci-defaults/99-xray-fetch
 chmod +x /usr/bin/vpn-connect.sh /usr/bin/vpn-agent.sh /usr/bin/vpn-apply.sh 2>/dev/null
 /etc/init.d/vpn-agent enable 2>/dev/null
 rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null
-echo "[$(date '+%H:%M:%S')] vpn-setup: done" >> "$$LOG"
+echo "[$$(date '+%H:%M:%S')] vpn-setup: done" >> "$$LOG"
 rm -f "$$SETUP"
 ENDSETUP
 chmod +x "$$SETUP"

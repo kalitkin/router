@@ -8,6 +8,15 @@ function index()
     entry({"admin", "services", "vpn"}, template("vpn/index"), _("VPN Setup"), 90)
     entry({"admin", "services", "vpn", "connect"}, call("action_connect")).leaf = true
     entry({"admin", "services", "vpn", "status"}, call("action_status")).leaf = true
+    entry({"admin", "services", "vpn", "progress"}, call("action_progress")).leaf = true
+end
+
+function action_progress()
+    local f = io.open("/tmp/vpn-progress", "r")
+    local data = f and f:read("*all") or '{"stage":"unknown","pct":0,"msg":""}'
+    if f then f:close() end
+    http.prepare_content("application/json")
+    http.write(data)
 end
 
 function action_connect()

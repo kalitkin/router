@@ -100,29 +100,60 @@ cat > "$SETUP" << 'ENDSETUP'
 #!/bin/sh
 sleep 5
 LOG=/tmp/vpn-install.log
+PROG=/tmp/vpn-progress
+progress() { printf '{"stage":"%s","pct":%d,"msg":"%s"}' "$1" "$2" "$3" > "$PROG"; }
+
 echo "[$(date '+%H:%M:%S')] vpn-setup: start" >> "$LOG"
+progress "setup" 5 "Инициализация..."
 
 sync
 echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-for P in curl ca-bundle jsonfilter xray-core; do
+for P in curl ca-bundle jsonfilter; do
     opkg list-installed 2>/dev/null | grep -q "^$P " && continue
     echo "[$(date '+%H:%M:%S')] vpn-setup: installing $P" >> "$LOG"
+    progress "setup" 20 "Устанавливаем $P..."
     opkg install "$P" >> "$LOG" 2>&1 && {
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         continue
     }
-    echo "[$(date '+%H:%M:%S')] vpn-setup: opkg update (needed for $P)" >> "$LOG"
     opkg update >> "$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     opkg install "$P" >> "$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 done
 
+if ! command -v xray > /dev/null 2>&1 && [ ! -x /tmp/xray ]; then
+    OWRT_ARCH=$(opkg print-architecture 2>/dev/null | awk '$1=="arch" && $3>=10 {print $2}' | grep -v 'all\|noarch' | tail -1)
+    if [ -z "$OWRT_ARCH" ]; then
+        echo "[$(date '+%H:%M:%S')] vpn-setup: cannot detect arch, skipping xray" >> "$LOG"
+    else
+        echo "[$(date '+%H:%M:%S')] vpn-setup: downloading xray for ${OWRT_ARCH}" >> "$LOG"
+        progress "setup" 50 "Загружаем xray для ${OWRT_ARCH}..."
+        curl -fsSL --connect-timeout 15 --max-time 120 \
+            -o /tmp/xray "https://self-music.online/packages/latest/${OWRT_ARCH}/xray" >> "$LOG" 2>&1 && \
+            [ -s /tmp/xray ] && chmod +x /tmp/xray && \
+            echo "[$(date '+%H:%M:%S')] vpn-setup: xray downloaded ok" >> "$LOG"
+    fi
+fi
+
+mkdir -p /etc/uci-defaults
+{
+    echo '#!/bin/sh'
+    echo '[ -x /usr/bin/xray ] && exit 0'
+    echo '[ -x /tmp/xray ] && exit 0'
+    echo 'A=$(opkg print-architecture 2>/dev/null | awk '"'"'$1=="arch"&&$3>=10{print $2}'"'"' | grep -v "all\|noarch" | tail -1)'
+    echo '[ -z "$A" ] && exit 0'
+    echo 'curl -fsSL --connect-timeout 15 --max-time 120 -o /tmp/xray "https://self-music.online/packages/latest/${A}/xray" && [ -s /tmp/xray ] && chmod +x /tmp/xray'
+    echo 'exit 0'
+} > /etc/uci-defaults/99-xray-fetch
+chmod +x /etc/uci-defaults/99-xray-fetch
+
 chmod +x /usr/bin/vpn-connect.sh /usr/bin/vpn-agent.sh /usr/bin/vpn-apply.sh 2>/dev/null
 /etc/init.d/vpn-agent enable 2>/dev/null
 rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null
 
+progress "ready" 100 ""
 echo "[$(date '+%H:%M:%S')] vpn-setup: done" >> "$LOG"
 rm -f "$SETUP"
 ENDSETUP

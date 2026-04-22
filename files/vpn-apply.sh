@@ -5,6 +5,7 @@
 
 DIR="/etc/vpn"
 LOG="/tmp/vpn.log"
+PROG=/tmp/vpn-progress
 APPLIED_HASH_FILE="$DIR/applied_hash"
 BYPASS_IPS="$DIR/bypass_ips.txt"
 BYPASS_DOMAINS="$DIR/bypass_domains.txt"
@@ -12,6 +13,7 @@ BYPASS_URL_IPS="https://self-music.online/router/bypass_ips.txt"
 BYPASS_URL_DOMAINS="https://self-music.online/router/bypass_domains.txt"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [apply] $1" >> "$LOG"; }
+progress() { printf '{"stage":"%s","pct":%d,"msg":"%s"}' "$1" "$2" "$3" > "$PROG"; }
 
 CONFIG_FILE="$DIR/config"
 
@@ -34,19 +36,20 @@ vpn_is_running() {
 }
 
 find_passwall() {
-    # Проверяем наличие config файла И init.d скрипта
-    if [ -f /etc/config/passwall ] && [ -f /etc/init.d/passwall ]; then
-        echo "passwall"; return 0
-    fi
-    if [ -f /etc/config/passwall2 ] && [ -f /etc/init.d/passwall2 ]; then
-        echo "passwall2"; return 0
-    fi
+    for PW in passwall passwall2; do
+        [ -f /etc/config/$PW ] || continue
+        # init.d might be missing after manual opkg remove — reinstall if needed
+        if [ ! -f /etc/init.d/$PW ]; then
+            log "passwall config found but init.d missing — reinstalling $PW"
+            opkg install "luci-app-$PW" >> "$LOG" 2>&1 || true
+        fi
+        [ -f /etc/init.d/$PW ] && { echo "$PW"; return 0; }
+    done
     return 1
 }
 
 find_xray() {
-    # Ищем xray в нескольких местах
-    for P in /usr/bin/xray /opt/xray/xray /usr/local/bin/xray; do
+    for P in /usr/bin/xray /tmp/xray /opt/xray/xray /usr/local/bin/xray; do
         [ -x "$P" ] && { echo "$P"; return 0; }
     done
     command -v xray >/dev/null 2>&1 && { which xray; return 0; }
@@ -86,6 +89,7 @@ if [ -f "$APPLIED_HASH_FILE" ]; then
 fi
 
 log "applying config (hash=$HASH): $(echo "$CONFIG" | head -c 60)..."
+progress "applying" 25 "Проверяем VPN клиент..."
 
 # ═══════════════════════════════════════════════════
 #  Bypass-списки
@@ -138,42 +142,40 @@ apply_bypass_passwall() {
 # ═══════════════════════════════════════════════════
 
 auto_install_passwall() {
-    log "auto-installing PassWall..."
-    RAM=$(get_ram_mb)
-    log "detected RAM: ${RAM}MB"
+    log "auto-installing PassWall via opkg..."
+    progress "installing" 35 "Добавляем репозиторий PassWall..."
 
-    cd /tmp || return 1
-    rm -f passwallx.sh
+    SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
+    REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
+    ARCH=$(opkg print-architecture 2>/dev/null | awk '$1=="arch" && $3>=10 {print $2}' | grep -v 'all\|noarch' | tail -1)
 
-    curl -s -m 30 -o passwallx.sh \
-        "https://raw.githubusercontent.com/amirhosseinchoghaei/Passwall/main/passwallx.sh" 2>/dev/null
-
-    if [ ! -f passwallx.sh ] || [ ! -s passwallx.sh ]; then
-        log "ERROR: cannot download passwallx.sh"
+    if [ -z "$ARCH" ]; then
+        log "ERROR: cannot detect arch for PassWall install"
+        progress "error" 0 "Не удалось определить архитектуру"
         return 1
     fi
-    chmod +x passwallx.sh
 
-    # passwallx.sh — интерактивный скрипт с меню
-    # Меню: 1) Install PassWall  2) Install PassWall2  3) Uninstall
-    # Подменю RAM: 1) 256MB+  2) 128MB
-    if [ "$RAM" -le 160 ]; then
-        log "128MB variant selected"
-        printf '1\n2\n' | sh passwallx.sh >>"$LOG" 2>&1
-    else
-        log "256MB+ variant selected"
-        printf '1\n1\n' | sh passwallx.sh >>"$LOG" 2>&1
-    fi
+    grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
+        echo "src/gz passwall_packages ${SF}/releases/packages-${REL}/${ARCH}/passwall_packages" >> /etc/opkg/customfeeds.conf
+    grep -q "passwall_luci" /etc/opkg/customfeeds.conf 2>/dev/null || \
+        echo "src/gz passwall_luci ${SF}/releases/packages-${REL}/${ARCH}/passwall_luci" >> /etc/opkg/customfeeds.conf
 
-    rm -f passwallx.sh
-    sleep 3
+    progress "installing" 45 "Обновляем список пакетов..."
+    log "running opkg update..."
+    opkg update >> "$LOG" 2>&1 || true
+    sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-    if find_passwall > /dev/null 2>&1; then
-        log "PassWall installed successfully!"
+    progress "installing" 60 "Устанавливаем PassWall..."
+    log "running opkg install luci-app-passwall..."
+    if opkg install luci-app-passwall >> "$LOG" 2>&1; then
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+        rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null
+        log "PassWall installed successfully"
         return 0
     fi
 
-    log "ERROR: PassWall install failed — check log"
+    log "ERROR: PassWall install failed — check $LOG"
+    progress "error" 0 "Не удалось установить PassWall"
     return 1
 }
 
@@ -190,6 +192,7 @@ BYPASS_PID=$!
 PW=$(find_passwall)
 if [ -n "$PW" ]; then
     log "found: $PW"
+    progress "applying" 75 "Настраиваем $PW..."
 
     # Настраиваем subscription
     uci set "${PW}.vpn_sub=subscribe_list"
@@ -216,11 +219,12 @@ if [ -n "$PW" ]; then
 
     if vpn_is_running; then
         log "$PW: configured and VPN is UP"
+        progress "done" 100 "VPN активен!"
     else
         log "$PW: configured but VPN process not detected yet (may take a moment)"
+        progress "done" 100 "Конфиг применён, VPN запускается..."
     fi
 
-    # Запоминаем хеш
     echo "$HASH" > "$APPLIED_HASH_FILE"
     exit 0
 fi
@@ -231,24 +235,17 @@ XRAY_BIN=$(find_xray)
 if [ -n "$XRAY_BIN" ]; then
     log "found: xray at $XRAY_BIN"
 
-    # Если config — URL подписки
+    # Subscription URL — нужен PassWall, raw xray не умеет subscription
     if echo "$CONFIG" | grep -q "^http"; then
-        log "downloading xray config from subscription URL..."
-        RAW=$(curl -s -m 15 "$CONFIG" 2>/dev/null)
-        if [ -n "$RAW" ]; then
-            DECODED=$(echo "$RAW" | base64 -d 2>/dev/null)
-            if [ -n "$DECODED" ]; then
-                mkdir -p /etc/xray
-                echo "$DECODED" > /etc/xray/config.json
-                log "xray config saved ($(wc -c < /etc/xray/config.json) bytes)"
-            else
-                log "ERROR: base64 decode failed"
-                exit 1
-            fi
-        else
-            log "ERROR: empty response from subscription URL"
-            exit 1
+        log "subscription URL — needs PassWall, triggering auto-install"
+        progress "installing" 30 "Нужен PassWall для подписки..."
+        wait $BYPASS_PID 2>/dev/null
+        if auto_install_passwall; then
+            log "re-running apply after PassWall install..."
+            exec /usr/bin/vpn-apply.sh
         fi
+        log "PassWall auto-install failed"
+        exit 1
     fi
 
     # Рестарт
@@ -268,13 +265,15 @@ fi
 # --- Ничего нет — автоустановка ---
 
 wait $BYPASS_PID 2>/dev/null
-log "WARNING: no PassWall/xray found"
+log "WARNING: no PassWall/xray found — auto-installing"
+progress "installing" 30 "Устанавливаем PassWall..."
 
 if auto_install_passwall; then
     log "re-running apply after install..."
     exec /usr/bin/vpn-apply.sh
 fi
 
+progress "error" 0 "Не удалось установить VPN клиент"
 log "FATAL: no VPN client, auto-install failed"
 log "Manual: cd /tmp && wget https://raw.githubusercontent.com/amirhosseinchoghaei/Passwall/main/passwallx.sh && chmod +x passwallx.sh && sh passwallx.sh"
 exit 1

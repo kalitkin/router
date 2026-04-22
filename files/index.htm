@@ -70,6 +70,38 @@
 .vpn-status-body b { display: block; font-size: .9rem; color: #1e293b; }
 .vpn-status-body span { font-size: .78rem; color: var(--vpn-gray); }
 
+/* ── Прогресс-бар ── */
+.vpn-progress {
+  display: none;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: #f0f9ff;
+  border: 1.5px solid #7dd3fc;
+  border-radius: var(--radius);
+}
+.vpn-progress.visible { display: block; }
+.vpn-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.vpn-progress-msg { font-size: .82rem; color: #0369a1; font-weight: 500; }
+.vpn-progress-pct { font-size: .78rem; color: var(--vpn-gray); }
+.vpn-progress-track {
+  height: 6px;
+  background: #e0f2fe;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.vpn-progress-fill {
+  height: 100%;
+  background: var(--vpn-blue);
+  border-radius: 3px;
+  transition: width .5s ease;
+  width: 0%;
+}
+
 /* ── OTP-ввод ── */
 .vpn-label {
   display: block;
@@ -224,6 +256,17 @@
     </div>
   </div>
 
+  <!-- Прогресс установки -->
+  <div class="vpn-progress" id="vpn-progress">
+    <div class="vpn-progress-head">
+      <span class="vpn-progress-msg" id="vpn-progress-msg">Подготовка...</span>
+      <span class="vpn-progress-pct" id="vpn-progress-pct">0%</span>
+    </div>
+    <div class="vpn-progress-track">
+      <div class="vpn-progress-fill" id="vpn-progress-fill"></div>
+    </div>
+  </div>
+
   <!-- Ввод кода -->
   <label class="vpn-label" for="d0">Код из Telegram</label>
   <div class="vpn-otp" id="vpn-otp">
@@ -263,15 +306,26 @@
 
 <script>
 (function () {
-  var digits  = [0,1,2,3,4,5].map(function(i){ return document.getElementById('d'+i); });
-  var btn     = document.getElementById('vpn-btn');
-  var btnText = document.getElementById('vpn-btn-text');
-  var spinner = document.getElementById('vpn-spinner');
-  var result  = document.getElementById('vpn-result');
-  var status  = document.getElementById('vpn-status');
+  var digits   = [0,1,2,3,4,5].map(function(i){ return document.getElementById('d'+i); });
+  var btn      = document.getElementById('vpn-btn');
+  var btnText  = document.getElementById('vpn-btn-text');
+  var spinner  = document.getElementById('vpn-spinner');
+  var result   = document.getElementById('vpn-result');
+  var status   = document.getElementById('vpn-status');
+  var progWrap = document.getElementById('vpn-progress');
+  var progMsg  = document.getElementById('vpn-progress-msg');
+  var progPct  = document.getElementById('vpn-progress-pct');
+  var progFill = document.getElementById('vpn-progress-fill');
 
-  var URL_STATUS  = '<%=luci.dispatcher.build_url("admin/services/vpn/status")%>';
-  var URL_CONNECT = '<%=luci.dispatcher.build_url("admin/services/vpn/connect")%>';
+  var _pollTimer = null;
+  var _systemReady = false;  // postinst setup finished
+
+  // Stages that block code input
+  var BUSY_STAGES = {setup:1, connecting:1, installing:1, applying:1};
+
+  var URL_STATUS   = '<%=luci.dispatcher.build_url("admin/services/vpn/status")%>';
+  var URL_CONNECT  = '<%=luci.dispatcher.build_url("admin/services/vpn/connect")%>';
+  var URL_PROGRESS = '<%=luci.dispatcher.build_url("admin/services/vpn/progress")%>';
 
   // ── OTP-ввод ──
 
@@ -280,7 +334,7 @@
   }
 
   function checkReady() {
-    var ok = getCode().length === 6;
+    var ok = getCode().length === 6 && _systemReady;
     btn.disabled = !ok;
     return ok;
   }
@@ -330,6 +384,77 @@
     inp.addEventListener('focus', function() { inp.select(); });
   });
 
+  // ── Прогресс ──
+
+  var STAGE_LABELS = {
+    setup:      'Подготовка системы...',
+    connecting: 'Подключение к серверу...',
+    installing: 'Установка PassWall...',
+    applying:   'Применение конфига...',
+    done:       'Готово!',
+    error:      'Ошибка',
+    ready:      'Готово к настройке'
+  };
+
+  function applyProgress(d) {
+    var stage = d.stage || 'unknown';
+    var pct   = d.pct   || 0;
+    var msg   = d.msg   || STAGE_LABELS[stage] || '';
+
+    var busy = !!BUSY_STAGES[stage];
+    _systemReady = !busy && stage !== 'unknown';
+
+    // Показываем/скрываем прогресс-бар
+    if (busy) {
+      progWrap.classList.add('visible');
+      progMsg.textContent  = msg || STAGE_LABELS[stage] || stage;
+      progPct.textContent  = pct + '%';
+      progFill.style.width = pct + '%';
+    } else {
+      progWrap.classList.remove('visible');
+    }
+
+    // Блокируем ячейки и кнопку во время установки
+    digits.forEach(function(d){ d.disabled = busy; });
+    checkReady();
+
+    // Обновляем статус-блок для done/error
+    if (stage === 'done') {
+      setStatus('is-up', 'VPN настроен!', msg || 'Применяем конфиг...');
+      stopPoll();
+    } else if (stage === 'error') {
+      setStatus('is-err', 'Ошибка', msg);
+      stopPoll();
+    } else if (stage === 'ready') {
+      stopPoll();
+    }
+  }
+
+  function pollProgress() {
+    var x = new XMLHttpRequest();
+    x.open('GET', URL_PROGRESS);
+    x.onload = function() {
+      try {
+        var d = JSON.parse(x.responseText);
+        applyProgress(d);
+        // Keep polling if still busy
+        if (BUSY_STAGES[d.stage]) {
+          _pollTimer = setTimeout(pollProgress, 2000);
+        }
+      } catch(e) { /* ignore parse errors */ }
+    };
+    x.send();
+  }
+
+  function startPoll() {
+    stopPoll();
+    pollProgress();
+  }
+
+  function stopPoll() {
+    if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+  }
+
   // ── Статус ──
 
   function setStatus(cls, title, sub) {
@@ -353,15 +478,31 @@
     }
   }
 
-  (function checkStatus() {
-    var x = new XMLHttpRequest();
-    x.open('GET', URL_STATUS);
-    x.onload = function() {
-      try { updateStatus(JSON.parse(x.responseText)); }
-      catch(e) { setStatus('', 'Не подключён', ''); }
+  // На старте: сначала читаем прогресс, потом статус VPN
+  (function init() {
+    var xp = new XMLHttpRequest();
+    xp.open('GET', URL_PROGRESS);
+    xp.onload = function() {
+      try {
+        var d = JSON.parse(xp.responseText);
+        applyProgress(d);
+        if (BUSY_STAGES[d.stage]) {
+          _pollTimer = setTimeout(pollProgress, 2000);
+          return; // не проверяем статус пока идёт установка
+        }
+      } catch(e) { _systemReady = true; checkReady(); }
+      // Проверяем статус VPN
+      var xs = new XMLHttpRequest();
+      xs.open('GET', URL_STATUS);
+      xs.onload = function() {
+        try { updateStatus(JSON.parse(xs.responseText)); }
+        catch(e) { setStatus('', 'Не подключён', ''); }
+      };
+      xs.onerror = function() { setStatus('is-err', 'Ошибка связи', ''); };
+      xs.send();
     };
-    x.onerror = function() { setStatus('is-err', 'Ошибка связи', ''); };
-    x.send();
+    xp.onerror = function() { _systemReady = true; checkReady(); };
+    xp.send();
   })();
 
   // ── Подключение ──
@@ -399,9 +540,10 @@
           showResult(true,
             '<b>✓ Подключено!</b><br>Device: ' +
             (d.device_id || '').substring(0,8) + '…<br>' +
-            'VPN агент запущен.');
-          setStatus('is-wait', 'Зарегистрирован — ожидание конфига…',
-            'Обычно занимает 5–30 секунд.');
+            'Применяем настройки...');
+          setStatus('is-wait', 'Зарегистрирован — настройка VPN…',
+            'Обычно занимает 1–3 минуты.');
+          startPoll();
         } else {
           showResult(false, '<b>Ошибка:</b> ' + (d.error || 'Неизвестная ошибка'));
         }

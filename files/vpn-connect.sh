@@ -6,8 +6,10 @@
 API="https://self-music.online/vpnapi/v1/router"
 DIR="/etc/vpn"
 LOG="/tmp/vpn.log"
+PROG=/tmp/vpn-progress
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [connect] $1" >> "$LOG"; echo "$1"; }
+progress() { printf '{"stage":"%s","pct":%d,"msg":"%s"}' "$1" "$2" "$3" > "$PROG"; }
 
 CODE="$1"
 if [ -z "$CODE" ]; then
@@ -45,6 +47,7 @@ FW=$(grep DISTRIB_RELEASE /etc/openwrt_release 2>/dev/null | cut -d"'" -f2 || ec
 RAM=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo "0")
 
 log "Registering: code=$CODE mac=$MAC model=$MODEL fw=$FW ram=${RAM}MB"
+progress "connecting" 20 "Регистрируем роутер..."
 
 mkdir -p "$DIR"
 
@@ -69,6 +72,7 @@ if [ $? -ne 0 ]; then
     [ -z "$ERROR" ] && ERROR=$(echo "$RESP" | grep -o '"detail":"[^"]*"' | cut -d'"' -f4)
     [ -z "$ERROR" ] && ERROR="$RESP"
     log "ERROR: registration failed: $ERROR"
+    progress "error" 0 "$ERROR"
     echo "FAIL: $ERROR"
     exit 1
 fi
@@ -101,13 +105,16 @@ echo "$MAC" > "$DIR/mac"
 chmod 600 "$DIR/token" "$DIR/secret"
 
 log "OK: registered device_id=$DEVICE_ID"
+progress "connecting" 60 "Регистрация успешна..."
 
 # Если конфиг пришёл сразу — сохраняем и применяем
 if [ -n "$CONFIG" ] && [ "$CONFIG" != "null" ] && [ "$CONFIG" != "" ]; then
     echo "$CONFIG" > "$DIR/config.tmp" && mv "$DIR/config.tmp" "$DIR/config"
     log "OK: config received immediately, applying..."
+    progress "connecting" 70 "Применяем конфиг..."
     /usr/bin/vpn-apply.sh 2>>"$LOG" &
 else
+    progress "ready" 100 ""
     log "OK: no config yet, agent will poll for it"
 fi
 
