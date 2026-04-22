@@ -23,6 +23,8 @@ fetch_arch() {
 }
 
 start() {
+    # Primary install puts xray-core in /usr/bin/xray via opkg.
+    # This service is a safety net: if xray is missing after boot, restore it.
     xray_present && return 0
 
     ARCH=$(fetch_arch)
@@ -31,18 +33,9 @@ start() {
         return 1
     fi
 
-    echo "[$(date '+%H:%M:%S')] xray-fetch: downloading for ${ARCH}" >> "$LOG"
-    if curl -fsSL --connect-timeout 15 --max-time 120 \
-            -o /tmp/xray "${XRAY_CDN}/${ARCH}/xray" 2>> "$LOG" \
-        && [ -s /tmp/xray ]; then
-        chmod +x /tmp/xray
-        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (CDN)" >> "$LOG"
-        return 0
-    fi
+    echo "[$(date '+%H:%M:%S')] xray-fetch: xray missing, restoring..." >> "$LOG"
 
-    # CDN failed — fall back to opkg from passwall SourceForge feed
-    echo "[$(date '+%H:%M:%S')] xray-fetch: CDN failed, trying opkg" >> "$LOG"
-    rm -f /tmp/xray
+    # Try opkg first — installs to /usr/bin/xray (persistent)
     SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
     REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
     grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
@@ -51,11 +44,23 @@ start() {
     opkg update >> "$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     if opkg install xray-core >> "$LOG" 2>&1; then
-        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (opkg)" >> "$LOG"
-    else
-        echo "[$(date '+%H:%M:%S')] xray-fetch: all methods failed" >> "$LOG"
+        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (opkg → /usr/bin/xray)" >> "$LOG"
+        return 0
     fi
-    return 0
+
+    # opkg failed — download binary to /tmp as fallback
+    echo "[$(date '+%H:%M:%S')] xray-fetch: opkg failed, downloading to /tmp" >> "$LOG"
+    if curl -fsSL --connect-timeout 15 --max-time 120 \
+            -o /tmp/xray "${XRAY_CDN}/${ARCH}/xray" 2>> "$LOG" \
+        && [ -s /tmp/xray ]; then
+        chmod +x /tmp/xray
+        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (CDN → /tmp/xray)" >> "$LOG"
+        return 0
+    fi
+
+    rm -f /tmp/xray
+    echo "[$(date '+%H:%M:%S')] xray-fetch: all methods failed" >> "$LOG"
+    return 1
 }
 
 stop() { return 0; }
