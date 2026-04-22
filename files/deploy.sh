@@ -33,7 +33,7 @@ echo "[2/5] Копирование файлов..."
 cp "$SCRIPT_DIR/install.sh" "$WEB/install.sh"
 chmod 644 "$WEB/install.sh"
 
-for F in vpn-connect.sh vpn-agent.sh vpn-apply.sh vpn-agent.init \
+for F in vpn-connect.sh vpn-agent.sh vpn-apply.sh vpn-agent.init xray-fetch.init \
          bypass_ips.txt bypass_domains.txt vpn.lua index.htm; do
     cp "$SCRIPT_DIR/$F" "$WEB/router/$F"
 done
@@ -122,7 +122,7 @@ if ! command -v jq > /dev/null 2>&1 || ! command -v unzip > /dev/null 2>&1; then
 fi
 
 if command -v jq > /dev/null 2>&1; then
-    /root/vpn-scripts/build.sh v1.0.0 --force
+    /root/vpn-scripts/build.sh v1.0.0 --all --force
 else
     echo "  WARNING: jq не установлен, запустите вручную:"
     echo "    /root/vpn-scripts/build.sh v1.0.0"

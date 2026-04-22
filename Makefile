@@ -44,7 +44,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/usr/bin/vpn-apply.sh   $(1)/usr/bin/vpn-apply.sh
 
 	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) ./files/etc/init.d/vpn-agent $(1)/etc/init.d/vpn-agent
+	$(INSTALL_BIN) ./files/etc/init.d/vpn-agent    $(1)/etc/init.d/vpn-agent
+	$(INSTALL_BIN) ./files/etc/init.d/xray-fetch   $(1)/etc/init.d/xray-fetch
 
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/vpn.lua \

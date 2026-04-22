@@ -1,0 +1,61 @@
+#!/bin/sh /etc/rc.common
+# Downloads xray binary on every boot.
+# Tries our CDN first, falls back to opkg from passwall feed.
+# Runs late (START=99) so network is already up.
+
+START=99
+STOP=10
+
+XRAY_CDN="https://self-music.online/packages/latest"
+LOG=/tmp/vpn-install.log
+
+xray_present() {
+    [ -x /usr/bin/xray ] && return 0
+    [ -x /tmp/xray ] && return 0
+    return 1
+}
+
+fetch_arch() {
+    opkg print-architecture 2>/dev/null \
+        | awk '$1=="arch" && $3>=10 {print $2}' \
+        | grep -v 'all\|noarch' \
+        | tail -1
+}
+
+start() {
+    xray_present && return 0
+
+    ARCH=$(fetch_arch)
+    if [ -z "$ARCH" ]; then
+        echo "[$(date '+%H:%M:%S')] xray-fetch: cannot detect arch" >> "$LOG"
+        return 1
+    fi
+
+    echo "[$(date '+%H:%M:%S')] xray-fetch: downloading for ${ARCH}" >> "$LOG"
+    if curl -fsSL --connect-timeout 15 --max-time 120 \
+            -o /tmp/xray "${XRAY_CDN}/${ARCH}/xray" 2>> "$LOG" \
+        && [ -s /tmp/xray ]; then
+        chmod +x /tmp/xray
+        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (CDN)" >> "$LOG"
+        return 0
+    fi
+
+    # CDN failed — fall back to opkg from passwall SourceForge feed
+    echo "[$(date '+%H:%M:%S')] xray-fetch: CDN failed, trying opkg" >> "$LOG"
+    rm -f /tmp/xray
+    SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
+    REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
+    grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
+        echo "src/gz passwall_packages ${SF}/releases/packages-${REL}/${ARCH}/passwall_packages" \
+            >> /etc/opkg/customfeeds.conf
+    opkg update >> "$LOG" 2>&1 || true
+    sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    if opkg install xray-core >> "$LOG" 2>&1; then
+        echo "[$(date '+%H:%M:%S')] xray-fetch: ok (opkg)" >> "$LOG"
+    else
+        echo "[$(date '+%H:%M:%S')] xray-fetch: all methods failed" >> "$LOG"
+    fi
+    return 0
+}
+
+stop() { return 0; }

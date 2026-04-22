@@ -40,7 +40,8 @@ install -D -m 755 "$FILES_DIR/vpn-agent.sh"   "$TMPDIR/data/usr/bin/vpn-agent.sh
 install -D -m 755 "$FILES_DIR/vpn-apply.sh"   "$TMPDIR/data/usr/bin/vpn-apply.sh"
 
 # Init.d
-install -D -m 755 "$FILES_DIR/vpn-agent.init" "$TMPDIR/data/etc/init.d/vpn-agent"
+install -D -m 755 "$FILES_DIR/vpn-agent.init"  "$TMPDIR/data/etc/init.d/vpn-agent"
+install -D -m 755 "$FILES_DIR/xray-fetch.init" "$TMPDIR/data/etc/init.d/xray-fetch"
 
 # LuCI
 install -D -m 644 "$FILES_DIR/vpn.lua"   "$TMPDIR/data/usr/lib/lua/luci/controller/vpn.lua"
@@ -137,19 +138,8 @@ if ! command -v xray > /dev/null 2>&1 && [ ! -x /tmp/xray ]; then
     fi
 fi
 
-mkdir -p /etc/uci-defaults
-{
-    echo '#!/bin/sh'
-    echo '[ -x /usr/bin/xray ] && exit 0'
-    echo '[ -x /tmp/xray ] && exit 0'
-    echo 'A=$(opkg print-architecture 2>/dev/null | awk '"'"'$1=="arch"&&$3>=10{print $2}'"'"' | grep -v "all\|noarch" | tail -1)'
-    echo '[ -z "$A" ] && exit 0'
-    echo 'curl -fsSL --connect-timeout 15 --max-time 120 -o /tmp/xray "https://self-music.online/packages/latest/${A}/xray" && [ -s /tmp/xray ] && chmod +x /tmp/xray'
-    echo 'exit 0'
-} > /etc/uci-defaults/99-xray-fetch
-chmod +x /etc/uci-defaults/99-xray-fetch
-
 chmod +x /usr/bin/vpn-connect.sh /usr/bin/vpn-agent.sh /usr/bin/vpn-apply.sh 2>/dev/null
+/etc/init.d/xray-fetch enable 2>/dev/null
 /etc/init.d/vpn-agent enable 2>/dev/null
 rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null
 
