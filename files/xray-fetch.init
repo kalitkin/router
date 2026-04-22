@@ -29,17 +29,18 @@ passwall_present() {
 }
 
 start() {
-    # Safety net: if PassWall is missing after boot, try to install it.
-    # PassWall brings xray-core as dependency — no need to install xray separately.
-    passwall_present && return 0
+    passwall_ok=0
+    xray_ok=0
+    passwall_present && passwall_ok=1
+    xray_present    && xray_ok=1
+
+    [ "$passwall_ok" -eq 1 ] && [ "$xray_ok" -eq 1 ] && return 0
 
     ARCH=$(fetch_arch)
     if [ -z "$ARCH" ]; then
         echo "[$(date '+%H:%M:%S')] xray-fetch: cannot detect arch" >> "$LOG"
         return 1
     fi
-
-    echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall missing, installing..." >> "$LOG"
 
     SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
     REL=$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE%.*}" || echo "24.10")
@@ -53,18 +54,31 @@ start() {
     opkg update >> "$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-    if opkg install luci-app-passwall >> "$LOG" 2>&1; then
-        echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall installed ok" >> "$LOG"
-        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-    else
-        echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall install failed" >> "$LOG"
+    if [ "$passwall_ok" -eq 0 ]; then
+        echo "[$(date '+%H:%M:%S')] xray-fetch: installing luci-app-passwall" >> "$LOG"
+        if opkg install luci-app-passwall >> "$LOG" 2>&1; then
+            echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall installed ok" >> "$LOG"
+        else
+            echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall install failed" >> "$LOG"
+        fi
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     fi
 
-    if ! command -v xray > /dev/null 2>&1; then
+    if [ "$xray_ok" -eq 0 ]; then
         echo "[$(date '+%H:%M:%S')] xray-fetch: installing xray-core" >> "$LOG"
-        opkg install xray-core >> "$LOG" 2>&1 && \
-            echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok" >> "$LOG"
+        if opkg install xray-core >> "$LOG" 2>&1; then
+            echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok (opkg)" >> "$LOG"
+        else
+            echo "[$(date '+%H:%M:%S')] xray-fetch: opkg failed, trying CDN fallback..." >> "$LOG"
+            CDN_BIN="${XRAY_CDN}/${ARCH}/xray"
+            if curl -s -m 90 -o /usr/bin/xray "$CDN_BIN" 2>>"$LOG" && [ -s /usr/bin/xray ]; then
+                chmod +x /usr/bin/xray
+                echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok (CDN)" >> "$LOG"
+            else
+                rm -f /usr/bin/xray
+                echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core install failed (opkg + CDN)" >> "$LOG"
+            fi
+        fi
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     fi
 

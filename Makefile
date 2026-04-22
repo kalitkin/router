@@ -114,12 +114,20 @@ if [ -n "$$OWRT_ARCH" ]; then
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         fi
     fi
-    if ! command -v xray > /dev/null 2>&1; then
+    if ! command -v xray > /dev/null 2>&1 && [ ! -x /usr/bin/xray ]; then
         echo "[$$(date '+%H:%M:%S')] vpn-setup: installing xray-core" >> "$$LOG"
         if opkg install xray-core >> "$$LOG" 2>&1; then
-            echo "[$$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok" >> "$$LOG"
+            echo "[$$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok (opkg)" >> "$$LOG"
         else
-            echo "[$$(date '+%H:%M:%S')] vpn-setup: xray-core install failed" >> "$$LOG"
+            echo "[$$(date '+%H:%M:%S')] vpn-setup: opkg failed, trying CDN fallback..." >> "$$LOG"
+            CDN_BIN="https://self-music.online/packages/latest/$${OWRT_ARCH}/xray"
+            if curl -s -m 90 -o /usr/bin/xray "$$CDN_BIN" 2>>"$$LOG" && [ -s /usr/bin/xray ]; then
+                chmod +x /usr/bin/xray
+                echo "[$$(date '+%H:%M:%S')] vpn-setup: xray-core installed ok (CDN)" >> "$$LOG"
+            else
+                rm -f /usr/bin/xray
+                echo "[$$(date '+%H:%M:%S')] vpn-setup: xray-core install failed (opkg + CDN)" >> "$$LOG"
+            fi
         fi
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
     fi
