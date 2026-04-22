@@ -13,8 +13,18 @@ end
 
 function action_progress()
     local f = io.open("/tmp/vpn-progress", "r")
-    local data = f and f:read("*all") or '{"stage":"unknown","pct":0,"msg":""}'
-    if f then f:close() end
+    local data
+    if f then
+        data = f:read("*all")
+        f:close()
+        -- if file exists but is empty or stale "done/ready", treat as ready
+        if not data or data == "" then
+            data = '{"stage":"ready","pct":100,"msg":""}'
+        end
+    else
+        -- no file = setup never ran or already finished
+        data = '{"stage":"ready","pct":100,"msg":""}'
+    end
     http.prepare_content("application/json")
     http.write(data)
 end

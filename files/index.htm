@@ -502,6 +502,7 @@
       xs.send();
     };
     xp.onerror = function() { _systemReady = true; checkReady(); };
+    xp.ontimeout = function() { _systemReady = true; checkReady(); };
     xp.send();
   })();
 

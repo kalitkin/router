@@ -3,7 +3,7 @@
 # Tries our CDN first, falls back to opkg from passwall feed.
 # Runs late (START=99) so network is already up.
 
-START=99
+START=95
 STOP=10
 
 XRAY_CDN="https://self-music.online/packages/latest"
