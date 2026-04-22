@@ -98,7 +98,12 @@ ok "xray: $XRAY_VERSION"
 
 if [ $ALL_ARCHS -eq 1 ]; then
     log "fetching all OpenWrt architectures..."
-    ARCH_LIST=$(curl -fsSL "$OPENWRT_DL/releases/$OPENWRT_RELEASE/packages/" | grep -oP 'href="([^"]+)/"' | grep -oP '"[^"]+"' | tr -d '"/' | grep -v '^\.\.')
+    # Фильтруем только валидные архитектуры (содержат '_', не содержат '.' и '/')
+    ARCH_LIST=$(curl -fsSL "$OPENWRT_DL/releases/$OPENWRT_RELEASE/packages/" \
+        | grep -oP 'href="[a-z][a-z0-9_-]+/"' \
+        | tr -d 'href="/' \
+        | grep '_' \
+        | sort -u)
 else
     ARCH_LIST="$POPULAR_ARCHS"
 fi
