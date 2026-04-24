@@ -4,13 +4,15 @@
 # Две фазы: 1) poll для конфига если нет  2) heartbeat loop
 
 API="https://self-music.online/vpnapi/v1/router"
+BYPASS_URL="https://self-music.online/router"
 DIR="/etc/vpn"
 LOG="/tmp/vpn.log"
 PING_INTERVAL=45
 PING_RETRY_DELAY=10
 CONFIG_POLL_INTERVAL=5
 CONFIG_MAX_ATTEMPTS=60
-CONFIG_CHECK_INTERVAL=300  # проверка обновлений конфига (5 мин)
+CONFIG_CHECK_INTERVAL=300   # проверка обновлений конфига (5 мин)
+BYPASS_CHECK_INTERVAL=3600  # проверка обновлений bypass-списков (1 час)
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [agent] $1" >> "$LOG"; }
 
@@ -73,6 +75,36 @@ check_vpn_health() {
         :
     fi
     return 0
+}
+
+# ═══════════════════════════════════════════════════
+#  Обновление bypass-списков
+# ═══════════════════════════════════════════════════
+
+check_bypass_update() {
+    CHANGED=0
+    for F in bypass_domains.txt bypass_ips.txt; do
+        NEW=$(curl -s -m 15 "$BYPASS_URL/$F" 2>/dev/null)
+        [ -z "$NEW" ] && continue
+        OLD=$(cat "$DIR/$F" 2>/dev/null)
+        [ "$NEW" = "$OLD" ] && continue
+        printf '%s\n' "$NEW" > "$DIR/$F.tmp" && mv "$DIR/$F.tmp" "$DIR/$F"
+        log "bypass updated: $F"
+        CHANGED=1
+    done
+
+    [ "$CHANGED" = "0" ] && return 0
+
+    for PW in passwall passwall2; do
+        [ -f /etc/init.d/$PW ] || continue
+        PW_RULES_DIR="/usr/share/${PW}/rules"
+        mkdir -p "$PW_RULES_DIR"
+        grep -v '^#' "$DIR/bypass_ips.txt"     | grep -v '^\s*$' | tr -d '\r' > "$PW_RULES_DIR/direct_ip"
+        grep -v '^#' "$DIR/bypass_domains.txt" | grep -v '^\s*$' | tr -d '\r' > "$PW_RULES_DIR/direct_host"
+        log "bypass rules applied → $PW, reloading"
+        /etc/init.d/$PW reload >>"$LOG" 2>&1 || /etc/init.d/$PW restart >>"$LOG" 2>&1 || true
+        break
+    done
 }
 
 # ═══════════════════════════════════════════════════
@@ -204,10 +236,11 @@ check_config_update() {
 # ═══════════════════════════════════════════════════
 
 heartbeat_loop() {
-    log "heartbeat started (ping=${PING_INTERVAL}s, config_check=${CONFIG_CHECK_INTERVAL}s)"
+    log "heartbeat started (ping=${PING_INTERVAL}s, config_check=${CONFIG_CHECK_INTERVAL}s, bypass_check=${BYPASS_CHECK_INTERVAL}s)"
     CONSECUTIVE_FAILS=0
     CYCLE=0
     CYCLES_PER_CONFIG_CHECK=$((CONFIG_CHECK_INTERVAL / PING_INTERVAL))
+    CYCLES_PER_BYPASS_CHECK=$((BYPASS_CHECK_INTERVAL / PING_INTERVAL))
 
     while true; do
         # Собираем данные
@@ -250,6 +283,11 @@ heartbeat_loop() {
         # Проверка обновлений конфига (каждые ~5 мин)
         if [ $((CYCLE % CYCLES_PER_CONFIG_CHECK)) -eq 0 ]; then
             check_config_update
+        fi
+
+        # Проверка обновлений bypass-списков (каждый час)
+        if [ $((CYCLE % CYCLES_PER_BYPASS_CHECK)) -eq 0 ] && [ $CYCLE -gt 0 ]; then
+            check_bypass_update
         fi
 
         # Health check VPN (каждые ~3 мин = ~4 цикла)
