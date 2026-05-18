@@ -115,7 +115,7 @@ ok "architectures: $ARCH_COUNT"
 
 mkdir -p "$VERDIR/common"
 TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+trap 'rm -rf "$TMPDIR"' EXIT
 
 # ═══ Скачиваем xray для каждой архитектуры ═══
 

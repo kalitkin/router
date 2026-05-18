@@ -26,7 +26,7 @@ echo "Выход: $OUTPUT"
 echo ""
 
 TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+trap 'rm -rf "$TMPDIR"' EXIT
 
 mkdir -p "$TMPDIR/data" "$TMPDIR/ctrl"
 

@@ -116,6 +116,7 @@ if [ ! -f "$DIR/token" ]; then
     exit 0
 fi
 
+# shellcheck disable=SC2034
 TOKEN=$(cat "$DIR/token")
 SECRET=$(cat "$DIR/secret" 2>/dev/null || echo "")
 MAC=""
