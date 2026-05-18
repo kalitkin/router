@@ -1,0 +1,130 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-router
+  cancel-in-progress: false
+
+jobs:
+
+  # ── Определяем что изменилось ──────────────────────────────────────────────
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      bypass: ${{ steps.filter.outputs.bypass }}
+      source: ${{ steps.filter.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            bypass:
+              - 'files/bypass_ips.txt'
+              - 'files/bypass_domains.txt'
+            source:
+              - 'files/vpn-connect.sh'
+              - 'files/vpn-agent.sh'
+              - 'files/vpn-apply.sh'
+              - 'files/vpn-agent.init'
+              - 'files/xray-fetch.init'
+              - 'files/vpn.lua'
+              - 'files/index.htm'
+              - 'patch-ipk.sh'
+              - 'Makefile'
+
+  # ── ShellCheck ─────────────────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: ShellCheck
+        run: |
+          shellcheck --severity=warning \
+            patch-ipk.sh \
+            files/vpn-connect.sh \
+            files/vpn-agent.sh \
+            files/vpn-apply.sh \
+            files/deploy.sh \
+            files/build.sh
+
+  # ── Сборка IPK (только при изменении исходников) ───────────────────────────
+  build:
+    needs: detect
+    if: needs.detect.outputs.source == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build IPK
+        run: bash patch-ipk.sh "$RUNNER_TEMP/router.ipk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: router-ipk
+          path: ${{ runner.temp }}/router.ipk
+          retention-days: 7
+
+  # ── Деплой ─────────────────────────────────────────────────────────────────
+  deploy:
+    needs: [detect, lint, build]
+    if: |
+      always() &&
+      needs.lint.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.detect.outputs.bypass == 'true' || needs.detect.outputs.source == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+
+      # Только bypass-файлы изменились → копируем их без пересборки IPK
+      - name: Deploy bypass files only
+        if: needs.detect.outputs.bypass == 'true' && needs.detect.outputs.source == 'false'
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' << 'ENDSSH'
+          set -e
+          cd /root/router
+          git pull
+          cp files/bypass_ips.txt files/bypass_domains.txt /var/www/self-music.online/router/
+          echo "==> Bypass lists updated"
+          ENDSSH
+
+      # Изменились исходники → пересобираем IPK, деплоим всё
+      - name: Download IPK
+        if: needs.detect.outputs.source == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: router-ipk
+          path: ${{ runner.temp }}
+
+      - name: Upload IPK to server
+        if: needs.detect.outputs.source == 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            "$RUNNER_TEMP/router.ipk" \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/router.ipk"
+
+      - name: Full deploy via SSH
+        if: needs.detect.outputs.source == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' << 'ENDSSH'
+          set -e
+          cd /root/router
+          git pull
+          SKIP_XRAY_BUILD=1 bash files/deploy.sh
+          ENDSSH

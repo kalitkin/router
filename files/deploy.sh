@@ -115,6 +115,10 @@ fi
 
 echo "[5/5] Xray репозиторий..."
 
+if [ "${SKIP_XRAY_BUILD:-0}" = "1" ]; then
+    echo "  Пропущено (CI)"
+else
+
 if ! command -v jq > /dev/null 2>&1 || ! command -v unzip > /dev/null 2>&1; then
     echo "  Устанавливаем jq/unzip..."
     apt-get install -y jq unzip > /dev/null 2>&1 || \
@@ -127,6 +131,8 @@ else
     echo "  WARNING: jq не установлен, запустите вручную:"
     echo "    /root/vpn-scripts/build.sh v1.0.0"
 fi
+
+fi # SKIP_XRAY_BUILD
 
 # ═══ Итого ═══
 
