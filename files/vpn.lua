@@ -10,6 +10,8 @@ function index()
     entry({"admin", "services", "vpn", "status"},   call("action_status")).leaf   = true
     entry({"admin", "services", "vpn", "progress"}, call("action_progress")).leaf = true
     entry({"admin", "services", "vpn", "update"},   call("action_update")).leaf   = true
+    entry({"admin", "services", "vpn", "direct"},   call("action_direct")).leaf   = true
+    entry({"admin", "services", "vpn", "logs"},     call("action_logs")).leaf     = true
 end
 
 function action_progress()
@@ -62,6 +64,40 @@ function action_connect()
         http.prepare_content("application/json")
         http.write('{"ok":false,"error":"' .. err .. '"}')
     end
+end
+
+function action_direct()
+    sys.exec("[ -f /etc/init.d/passwall ]  && /etc/init.d/passwall  stop 2>/dev/null; " ..
+             "[ -f /etc/init.d/passwall2 ] && /etc/init.d/passwall2 stop 2>/dev/null; " ..
+             "killall xray 2>/dev/null; rm -f /etc/vpn/vpn_started")
+    http.prepare_content("application/json")
+    http.write('{"ok":true}')
+end
+
+function action_logs()
+    local log_file = "/etc/vpn/vpn-agent.log"
+    local fallback = "/tmp/vpn.log"
+    local path = log_file
+    if not fs.access(log_file) then path = fallback end
+
+    local lines = {}
+    local f = io.open(path, "r")
+    if f then
+        for line in f:lines() do
+            lines[#lines + 1] = line
+        end
+        f:close()
+    end
+
+    -- последние 50 строк
+    local start = #lines > 50 and (#lines - 49) or 1
+    local out = {}
+    for i = start, #lines do
+        out[#out + 1] = lines[i]:gsub('\\', '\\\\'):gsub('"', '\\"')
+    end
+
+    http.prepare_content("application/json")
+    http.write('{"lines":["' .. table.concat(out, '","') .. '"]}')
 end
 
 function action_update()

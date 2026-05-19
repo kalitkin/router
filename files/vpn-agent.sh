@@ -14,6 +14,7 @@ CONFIG_CHECK_INTERVAL=300       # 5 мин
 BYPASS_CHECK_INTERVAL=3600      # 1 час
 HEAL_EVERY=4                    # self-heal каждые N циклов heartbeat
 VERIFY_TIMEOUT=30               # сек ожидания запуска xray
+CIRCUIT_THRESHOLD=7             # ~5 мин недоступности → circuit open (7 × 45с)
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [agent] $1" >> "$LOG"; }
 
@@ -119,15 +120,27 @@ check_vpn_health() {
     [ ! -f "$DIR/config" ] || [ ! -s "$DIR/config" ] && return 0
     passwall_is_enabled || return 0
 
-    log "VPN process dead — self-healing"
+    log "VPN process dead — Level 1: restarting PassWall"
+    for PW in passwall passwall2; do
+        [ -f /etc/init.d/$PW ] && /etc/init.d/$PW restart 2>>"$LOG" && break
+    done
+    sleep 5
+
+    if vpn_is_running; then
+        log "self-heal L1: VPN recovered via PassWall restart"
+        date +%s > "$DIR/vpn_started"
+        return 0
+    fi
+
+    log "self-heal L1 failed — Level 2: re-applying config"
     /usr/bin/vpn-apply.sh 2>>"$LOG"
     sleep 5
 
     if vpn_is_running; then
-        log "self-heal: VPN recovered"
+        log "self-heal L2: VPN recovered"
         date +%s > "$DIR/vpn_started"
     else
-        log "self-heal: apply failed — rolling back"
+        log "self-heal L2 failed — rolling back"
         rollback || failover
     fi
 }
@@ -315,10 +328,12 @@ check_config_update() {
 heartbeat_loop() {
     log "heartbeat started (ping=${PING_INTERVAL}s config=${CONFIG_CHECK_INTERVAL}s bypass=${BYPASS_CHECK_INTERVAL}s)"
     CONSECUTIVE_FAILS=0
+    CIRCUIT_OPEN=0
     CYCLE=0
     CYCLES_PER_CONFIG_CHECK=$((CONFIG_CHECK_INTERVAL / PING_INTERVAL))
     CYCLES_PER_BYPASS_CHECK=$((BYPASS_CHECK_INTERVAL / PING_INTERVAL))
     VPN_WAS_UP=0
+    BYPASS_VER_LOCAL=$(cat "$DIR/bypass_version" 2>/dev/null || echo "")
 
     while true; do
         IP=""
@@ -341,14 +356,20 @@ heartbeat_loop() {
             rm -f "$DIR/vpn_started"
         fi
 
-        HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API/ping" \
+        PING_RESP=$(curl -s -w '\n__HTTP__%{http_code}' -m 10 -X POST "$API/ping" \
             -H "Content-Type: application/json" \
             -d "{\"mac\":\"$MAC\",\"ip\":\"$IP\",\"firmware_version\":\"$FW\",\"secret\":\"$SECRET\",\"vpn_up\":$VPN_UP}" \
             2>/dev/null)
+        HTTP_CODE=$(echo "$PING_RESP" | grep '__HTTP__' | sed 's/__HTTP__//')
+        PING_BODY=$(echo "$PING_RESP" | grep -v '__HTTP__')
 
         if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]; then
             [ $CONSECUTIVE_FAILS -gt 0 ] && log "ping recovered after $CONSECUTIVE_FAILS fails"
             CONSECUTIVE_FAILS=0
+            if [ $CIRCUIT_OPEN -eq 1 ]; then
+                CIRCUIT_OPEN=0
+                log "circuit breaker CLOSED: server reachable again"
+            fi
         else
             CONSECUTIVE_FAILS=$((CONSECUTIVE_FAILS + 1))
             [ $CONSECUTIVE_FAILS -le 5 ] && log "ping FAIL #$CONSECUTIVE_FAILS (HTTP $HTTP_CODE)"
@@ -356,12 +377,34 @@ heartbeat_loop() {
                 sleep $PING_RETRY_DELAY
                 continue
             fi
+            if [ $CONSECUTIVE_FAILS -ge $CIRCUIT_THRESHOLD ]; then
+                if [ $CIRCUIT_OPEN -eq 0 ]; then
+                    CIRCUIT_OPEN=1
+                    log "circuit breaker OPEN: server unreachable ${CONSECUTIVE_FAILS} times, slowing to 300s"
+                fi
+                sleep 300
+                continue
+            fi
         fi
 
         CYCLE=$((CYCLE + 1))
 
         [ $((CYCLE % CYCLES_PER_CONFIG_CHECK)) -eq 0 ] && check_config_update
-        [ $((CYCLE % CYCLES_PER_BYPASS_CHECK)) -eq 0 ] && [ $CYCLE -gt 0 ] && check_bypass_update
+
+        # bypass_version: обновляем только если сервер сигнализирует об изменении
+        BYPASS_VER_SERVER=$(json_get "$PING_BODY" "bypass_version")
+        if [ -n "$BYPASS_VER_SERVER" ]; then
+            if [ "$BYPASS_VER_SERVER" != "$BYPASS_VER_LOCAL" ]; then
+                log "bypass_version changed: $BYPASS_VER_LOCAL → $BYPASS_VER_SERVER"
+                check_bypass_update
+                BYPASS_VER_LOCAL="$BYPASS_VER_SERVER"
+                echo "$BYPASS_VER_SERVER" > "$DIR/bypass_version"
+            fi
+        else
+            # Сервер не отдаёт bypass_version — fallback: проверяем раз в час
+            [ $((CYCLE % CYCLES_PER_BYPASS_CHECK)) -eq 0 ] && [ $CYCLE -gt 0 ] && check_bypass_update
+        fi
+
         [ $((CYCLE % HEAL_EVERY)) -eq 0 ] && check_vpn_health
         [ $((CYCLE % 20)) -eq 0 ] && rotate_log
 

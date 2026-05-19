@@ -231,7 +231,7 @@
   color: #1e293b;
 }
 
-/* ── Кнопка обновления ── */
+/* ── Маленькие кнопки ── */
 .vpn-btn-sm {
   background: none;
   border: none;
@@ -244,7 +244,28 @@
   text-decoration-color: #cbd5e1;
 }
 .vpn-btn-sm:hover:not(:disabled) { color: var(--vpn-blue); text-decoration-color: var(--vpn-blue); }
+.vpn-btn-sm.danger:hover:not(:disabled) { color: var(--vpn-red); text-decoration-color: var(--vpn-red); }
 .vpn-btn-sm:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── Лог ── */
+.vpn-log {
+  display: none;
+  margin-top: 12px;
+  background: #0f172a;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.vpn-log.visible { display: block; }
+.vpn-log pre {
+  margin: 0;
+  font-size: .7rem;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
 </style>
 
 <div class="vpn-wrap">
@@ -300,9 +321,18 @@
 
   <div class="vpn-result" id="vpn-result"></div>
 
-  <!-- Обновление пакета -->
-  <div style="margin-top:10px;text-align:right">
+  <!-- Действия -->
+  <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+    <div style="display:flex;gap:14px">
+      <button class="vpn-btn-sm danger" id="vpn-direct-btn" onclick="doDirect()">Отключить VPN</button>
+      <button class="vpn-btn-sm" id="vpn-logs-btn" onclick="doToggleLogs()">Показать лог</button>
+    </div>
     <button class="vpn-btn-sm" id="vpn-update-btn" onclick="doUpdate()">Обновить пакет</button>
+  </div>
+
+  <!-- Лог -->
+  <div class="vpn-log" id="vpn-log">
+    <pre id="vpn-log-pre">Загрузка...</pre>
   </div>
 
   <!-- Инструкция -->
@@ -341,7 +371,12 @@
   var _statusTimer  = null;
   var _systemReady  = false;
   var _isUpdating   = false;
+  var _logsVisible  = false;
   var updateBtn     = document.getElementById('vpn-update-btn');
+  var directBtn     = document.getElementById('vpn-direct-btn');
+  var logsBtn       = document.getElementById('vpn-logs-btn');
+  var logWrap       = document.getElementById('vpn-log');
+  var logPre        = document.getElementById('vpn-log-pre');
 
   // Stages that block code input
   var BUSY_STAGES = {setup:1, connecting:1, installing:1, applying:1};
@@ -350,6 +385,8 @@
   var URL_CONNECT  = '<%=luci.dispatcher.build_url("admin/services/vpn/connect")%>';
   var URL_PROGRESS = '<%=luci.dispatcher.build_url("admin/services/vpn/progress")%>';
   var URL_UPDATE   = '<%=luci.dispatcher.build_url("admin/services/vpn/update")%>';
+  var URL_DIRECT   = '<%=luci.dispatcher.build_url("admin/services/vpn/direct")%>';
+  var URL_LOGS     = '<%=luci.dispatcher.build_url("admin/services/vpn/logs")%>';
 
   // ── OTP-ввод ──
 
@@ -577,6 +614,45 @@
     result.className = 'vpn-result ' + (ok ? 'ok' : 'err');
     result.innerHTML = html;
   }
+
+  window.doDirect = function() {
+    if (!confirm('Отключить VPN и перейти на прямое подключение?')) return;
+    directBtn.disabled = true;
+    directBtn.textContent = 'Отключение...';
+    var x = new XMLHttpRequest();
+    x.open('POST', URL_DIRECT);
+    x.timeout = 10000;
+    x.onload = function() {
+      setStatus('is-err', 'VPN отключён', 'Трафик идёт напрямую.');
+      directBtn.disabled = false;
+      directBtn.textContent = 'Отключить VPN';
+    };
+    x.onerror = x.ontimeout = function() {
+      directBtn.disabled = false;
+      directBtn.textContent = 'Отключить VPN';
+    };
+    x.send();
+  };
+
+  window.doToggleLogs = function() {
+    _logsVisible = !_logsVisible;
+    logWrap.classList.toggle('visible', _logsVisible);
+    logsBtn.textContent = _logsVisible ? 'Скрыть лог' : 'Показать лог';
+    if (!_logsVisible) return;
+    logPre.textContent = 'Загрузка...';
+    var x = new XMLHttpRequest();
+    x.open('GET', URL_LOGS);
+    x.timeout = 8000;
+    x.onload = function() {
+      try {
+        var d = JSON.parse(x.responseText);
+        logPre.textContent = d.lines.length ? d.lines.join('\n') : '(лог пуст)';
+        logWrap.scrollTop = logWrap.scrollHeight;
+      } catch(e) { logPre.textContent = 'Ошибка загрузки лога.'; }
+    };
+    x.onerror = x.ontimeout = function() { logPre.textContent = 'Ошибка загрузки лога.'; };
+    x.send();
+  };
 
   window.doUpdate = function() {
     if (_isUpdating) return;
