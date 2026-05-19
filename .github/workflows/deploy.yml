@@ -96,9 +96,11 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          # Handle both real newlines and literal \n (common secret storage issue)
+          printf '%s' "$SSH_KEY" | tr -d '\r' | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null && echo "SSH key OK" || echo "WARNING: ssh key may be malformed"
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -107,7 +109,7 @@ jobs:
       - name: Deploy bypass files only
         if: needs.detect.outputs.bypass == 'true' && needs.detect.outputs.source == 'false'
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' << 'ENDSSH'
           set -e
           cd /root/router
@@ -127,14 +129,14 @@ jobs:
       - name: Upload IPK to server
         if: needs.detect.outputs.source == 'true'
         run: |
-          scp -i ~/.ssh/deploy_key \
+          scp -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
             "$RUNNER_TEMP/router.ipk" \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/router.ipk"
 
       - name: Full deploy via SSH
         if: needs.detect.outputs.source == 'true'
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' << 'ENDSSH'
           set -e
           cd /root/router
@@ -146,7 +148,7 @@ jobs:
       - name: Deploy Keenetic scripts
         if: needs.detect.outputs.keenetic == 'true'
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' << 'ENDSSH'
           set -e
           cd /root/router
