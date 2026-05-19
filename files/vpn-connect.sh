@@ -112,7 +112,7 @@ if [ -n "$CONFIG" ] && [ "$CONFIG" != "null" ] && [ "$CONFIG" != "" ]; then
     echo "$CONFIG" > "$DIR/config.tmp" && mv "$DIR/config.tmp" "$DIR/config"
     log "OK: config received immediately, applying..."
     progress "connecting" 70 "Применяем конфиг..."
-    /usr/bin/vpn-apply.sh 2>>"$LOG" &
+    SHOW_VPN_PROGRESS=1 /usr/bin/vpn-apply.sh 2>>"$LOG" &
 else
     progress "ready" 100 ""
     log "OK: no config yet, agent will poll for it"

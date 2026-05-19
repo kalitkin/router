@@ -13,7 +13,12 @@ BYPASS_URL_IPS="https://self-music.online/router/bypass_ips.txt"
 BYPASS_URL_DOMAINS="https://self-music.online/router/bypass_domains.txt"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [apply] $1" >> "$LOG"; }
-progress() { printf '{"stage":"%s","pct":%d,"msg":"%s"}' "$1" "$2" "$3" > "$PROG"; }
+# Пишем в progress только если вызваны из connect-потока (SHOW_VPN_PROGRESS=1)
+# Из агента (self-heal, startup, update) — молчим, чтобы не перетирать UI
+progress() {
+    [ "${SHOW_VPN_PROGRESS:-0}" = "1" ] || return 0
+    printf '{"stage":"%s","pct":%d,"msg":"%s"}' "$1" "$2" "$3" > "$PROG"
+}
 
 CONFIG_FILE="$DIR/config"
 
