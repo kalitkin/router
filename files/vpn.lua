@@ -6,9 +6,10 @@ local fs = require "nixio.fs"
 
 function index()
     entry({"admin", "services", "vpn"}, template("vpn/index"), _("VPN Setup"), 90)
-    entry({"admin", "services", "vpn", "connect"}, call("action_connect")).leaf = true
-    entry({"admin", "services", "vpn", "status"}, call("action_status")).leaf = true
+    entry({"admin", "services", "vpn", "connect"},  call("action_connect")).leaf  = true
+    entry({"admin", "services", "vpn", "status"},   call("action_status")).leaf   = true
     entry({"admin", "services", "vpn", "progress"}, call("action_progress")).leaf = true
+    entry({"admin", "services", "vpn", "update"},   call("action_update")).leaf   = true
 end
 
 function action_progress()
@@ -61,6 +62,43 @@ function action_connect()
         http.prepare_content("application/json")
         http.write('{"ok":false,"error":"' .. err .. '"}')
     end
+end
+
+function action_update()
+    local script = [[
+#!/bin/sh
+PROG=/tmp/vpn-progress
+printf '{"stage":"setup","pct":15,"msg":"Скачиваем обновление..."}' > "$PROG"
+if opkg install --force-reinstall 'https://self-music.online/router.ipk' >> /tmp/vpn-update.log 2>&1; then
+    printf '{"stage":"done","pct":100,"msg":"Обновление установлено!"}' > "$PROG"
+    sleep 1
+    /etc/init.d/vpn-agent restart >> /tmp/vpn-update.log 2>&1 || \
+    /etc/init.d/vpn-agent start   >> /tmp/vpn-update.log 2>&1 || true
+else
+    printf '{"stage":"error","pct":0,"msg":"Ошибка обновления. Лог: /tmp/vpn-update.log"}' > "$PROG"
+fi
+rm -f /tmp/.vpn-update.sh
+]]
+
+    local f = io.open("/tmp/.vpn-update.sh", "w")
+    if not f then
+        http.prepare_content("application/json")
+        http.write('{"ok":false,"error":"Cannot write script"}')
+        return
+    end
+    f:write(script)
+    f:close()
+
+    -- Пишем начальный прогресс до фонового запуска — избегаем race в JS polling
+    local pf = io.open("/tmp/vpn-progress", "w")
+    if pf then
+        pf:write('{"stage":"setup","pct":5,"msg":"Запуск обновления..."}')
+        pf:close()
+    end
+
+    os.execute("chmod +x /tmp/.vpn-update.sh && (sh /tmp/.vpn-update.sh > /dev/null 2>&1) &")
+    http.prepare_content("application/json")
+    http.write('{"ok":true}')
 end
 
 function action_status()

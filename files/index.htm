@@ -230,6 +230,21 @@
   font-size: .78rem;
   color: #1e293b;
 }
+
+/* ── Кнопка обновления ── */
+.vpn-btn-sm {
+  background: none;
+  border: none;
+  color: var(--vpn-gray);
+  font-size: .75rem;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: #cbd5e1;
+}
+.vpn-btn-sm:hover:not(:disabled) { color: var(--vpn-blue); text-decoration-color: var(--vpn-blue); }
+.vpn-btn-sm:disabled { opacity: .45; cursor: not-allowed; }
 </style>
 
 <div class="vpn-wrap">
@@ -285,6 +300,11 @@
 
   <div class="vpn-result" id="vpn-result"></div>
 
+  <!-- Обновление пакета -->
+  <div style="margin-top:10px;text-align:right">
+    <button class="vpn-btn-sm" id="vpn-update-btn" onclick="doUpdate()">Обновить пакет</button>
+  </div>
+
   <!-- Инструкция -->
   <div class="vpn-steps">
     <b>Как получить код</b>
@@ -319,6 +339,8 @@
 
   var _pollTimer = null;
   var _systemReady = false;  // postinst setup finished
+  var _isUpdating  = false;
+  var updateBtn    = document.getElementById('vpn-update-btn');
 
   // Stages that block code input
   var BUSY_STAGES = {setup:1, connecting:1, installing:1, applying:1};
@@ -326,6 +348,7 @@
   var URL_STATUS   = '<%=luci.dispatcher.build_url("admin/services/vpn/status")%>';
   var URL_CONNECT  = '<%=luci.dispatcher.build_url("admin/services/vpn/connect")%>';
   var URL_PROGRESS = '<%=luci.dispatcher.build_url("admin/services/vpn/progress")%>';
+  var URL_UPDATE   = '<%=luci.dispatcher.build_url("admin/services/vpn/update")%>';
 
   // ── OTP-ввод ──
 
@@ -420,13 +443,24 @@
 
     // Обновляем статус-блок для done/error
     if (stage === 'done') {
-      setStatus('is-up', 'VPN настроен!', msg || 'Применяем конфиг...');
-      stopPoll();
+      if (_isUpdating) {
+        setStatus('is-up', 'Обновление установлено!', 'Страница обновится через 3 секунды...');
+        stopPoll();
+        setTimeout(function() { location.reload(); }, 3000);
+      } else {
+        setStatus('is-up', 'VPN настроен!', msg || 'Применяем конфиг...');
+        stopPoll();
+      }
     } else if (stage === 'error') {
+      if (_isUpdating) {
+        _isUpdating = false;
+        updateBtn.disabled = false;
+        updateBtn.textContent = 'Обновить пакет';
+      }
       setStatus('is-err', 'Ошибка', msg);
       stopPoll();
     } else if (stage === 'ready') {
-      stopPoll();
+      if (!_isUpdating) stopPoll();
     }
   }
 
@@ -533,6 +567,40 @@
     result.className = 'vpn-result ' + (ok ? 'ok' : 'err');
     result.innerHTML = html;
   }
+
+  window.doUpdate = function() {
+    if (_isUpdating) return;
+    _isUpdating = true;
+    updateBtn.disabled = true;
+    updateBtn.textContent = 'Обновляется...';
+
+    var x = new XMLHttpRequest();
+    x.open('POST', URL_UPDATE);
+    x.timeout = 15000;
+    x.onload = function() {
+      try {
+        var d = JSON.parse(x.responseText);
+        if (d.ok) {
+          startPoll();
+        } else {
+          _isUpdating = false;
+          updateBtn.disabled = false;
+          updateBtn.textContent = 'Обновить пакет';
+          showResult(false, 'Ошибка: ' + (d.error || 'Неизвестная ошибка'));
+        }
+      } catch(e) {
+        _isUpdating = false;
+        updateBtn.disabled = false;
+        updateBtn.textContent = 'Обновить пакет';
+      }
+    };
+    x.onerror = x.ontimeout = function() {
+      _isUpdating = false;
+      updateBtn.disabled = false;
+      updateBtn.textContent = 'Обновить пакет';
+    };
+    x.send();
+  };
 
   window.doConnect = function() {
     if (!checkReady()) return;
