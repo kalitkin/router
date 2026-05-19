@@ -1,0 +1,59 @@
+networks:
+  vpn-test:
+    driver: bridge
+
+services:
+
+  # ── Keenetic RCI mock ────────────────────────────────────────────────────────
+  keenetic-mock:
+    build: ./mock-rci
+    ports:
+      - "8000:8000"
+    environment:
+      - ADMIN_LOGIN=admin
+      - ADMIN_PASSWORD=keenetic
+    networks:
+      - vpn-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── VPN API mock (self-music.online) ─────────────────────────────────────────
+  mock-vpnapi:
+    build: ./mock-vpnapi
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./scripts:/opt/scripts:ro
+    networks:
+      - vpn-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Test runner (Alpine + stubs) ─────────────────────────────────────────────
+  # По умолчанию запускает test.sh и завершается.
+  # Для интерактивной отладки:
+  #   docker compose run --rm test-runner sh
+  test-runner:
+    build: ./test-runner
+    environment:
+      - VPN_API_URL=http://mock-vpnapi:8080/vpnapi/v1/router
+      - VPN_BYPASS_URL=http://mock-vpnapi:8080/router
+      - VPN_BASE_URL=http://mock-vpnapi:8080
+      - RCI_HOST=http://keenetic-mock:8000
+    volumes:
+      - ./scripts:/opt/scripts:ro
+    networks:
+      - vpn-test
+    depends_on:
+      keenetic-mock:
+        condition: service_healthy
+      mock-vpnapi:
+        condition: service_healthy

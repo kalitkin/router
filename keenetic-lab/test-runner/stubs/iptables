@@ -1,0 +1,38 @@
+#!/bin/sh
+# iptables stub — имитирует iptables с отслеживанием цепочек
+
+STATE_DIR="/tmp/iptables_state"
+mkdir -p "$STATE_DIR"
+
+table="filter"
+cmd=""
+chain=""
+
+# Parse: -t <table>, -N/-F/-A/-D/-I/-L/-X <chain>
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -t)   shift; table="$1" ;;
+        -N)   cmd="-N"; shift; chain="$1" ;;
+        -F)   cmd="-F"; shift; chain="${1:-}" ;;
+        -A)   cmd="-A"; shift; chain="$1" ;;
+        -D)   cmd="-D"; shift; chain="$1" ;;
+        -I)   cmd="-I"; shift; chain="$1" ;;
+        -X)   cmd="-X"; shift; chain="${1:-}" ;;
+        -L)   cmd="-L"; shift; chain="${1:-}" ;;
+        -P)   cmd="-P"; shift; chain="$1" ;;
+        --*)  ;;  # skip long opts
+        -j|-m|-d|-s|-p|-i|-o) shift ;;  # skip arg-taking opts
+    esac
+    shift 2>/dev/null || break
+done
+
+case "$cmd" in
+    -N) touch "$STATE_DIR/${table}__${chain}" 2>/dev/null; exit 0 ;;
+    -X) rm -f "$STATE_DIR/${table}__${chain}" 2>/dev/null; exit 0 ;;
+    -L)
+        # Return 0 if chain exists (or no chain specified = list all)
+        [ -z "$chain" ] && exit 0
+        [ -f "$STATE_DIR/${table}__${chain}" ] && exit 0 || exit 1
+        ;;
+    *)  exit 0 ;;
+esac

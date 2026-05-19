@@ -1,0 +1,64 @@
+#!/bin/sh
+# Entware init.d script for vpn-agent
+# Place at /opt/etc/init.d/S99vpn-agent
+# chmod +x /opt/etc/init.d/S99vpn-agent
+#
+# Entware rc.func запускает $PROCS через start-stop-daemon.
+# Но keenetic-agent.sh — это бесконечный цикл (sh-скрипт), поэтому
+# используем собственный start/stop с PID-файлом.
+
+DAEMON=/opt/bin/keenetic-agent.sh
+PIDFILE=/opt/var/run/vpn-agent.pid
+LOG=/opt/var/log/vpn-agent.log
+NAME=vpn-agent
+
+ansi_red="\033[1;31m"
+ansi_white="\033[1;37m"
+ansi_green="\033[1;32m"
+ansi_reset="\033[0m"
+
+rc_start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        printf " %b%s%b already running (pid %s)\n" "$ansi_white" "$NAME" "$ansi_reset" "$(cat "$PIDFILE")"
+        return 0
+    fi
+    mkdir -p /opt/var/log /opt/var/run
+    sh "$DAEMON" >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    printf " %b%s%b started (pid %s)\n" "$ansi_green" "$NAME" "$ansi_reset" "$(cat "$PIDFILE")"
+}
+
+rc_stop() {
+    if [ ! -f "$PIDFILE" ]; then
+        printf " %b%s%b not running\n" "$ansi_white" "$NAME" "$ansi_reset"
+        return 0
+    fi
+    pid=$(cat "$PIDFILE")
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        pkill -f "keenetic-agent.sh" 2>/dev/null
+        sleep 1
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    fi
+    rm -f "$PIDFILE"
+    printf " %b%s%b stopped\n" "$ansi_white" "$NAME" "$ansi_reset"
+}
+
+rc_status() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        printf " %b%s%b is running (pid %s)\n" "$ansi_green" "$NAME" "$ansi_reset" "$(cat "$PIDFILE")"
+    else
+        printf " %b%s%b is not running\n" "$ansi_red" "$NAME" "$ansi_reset"
+    fi
+}
+
+case "$1" in
+    start)   rc_start  ;;
+    stop)    rc_stop   ;;
+    restart) rc_stop; sleep 1; rc_start ;;
+    status)  rc_status ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

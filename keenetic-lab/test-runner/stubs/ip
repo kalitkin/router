@@ -1,0 +1,27 @@
+#!/bin/sh
+# ip stub — real iproute2 is installed but rule/route add need privileges.
+# Intercept privileged calls; pass safe reads to the real binary.
+
+REAL_IP=$(command -v ip.real 2>/dev/null || echo "")
+
+case "$1 $2" in
+    "rule add"|"rule del"|"rule flush")
+        exit 0
+        ;;
+    "route add"|"route del"|"route flush")
+        exit 0
+        ;;
+    "route get")
+        # Return usable fake output for src IP detection
+        echo "8.8.8.8 via 172.18.0.1 dev eth0 src 172.18.0.5 uid 0"
+        exit 0
+        ;;
+    *)
+        # Pass everything else to real ip if available
+        if [ -n "$REAL_IP" ]; then
+            exec "$REAL_IP" "$@"
+        else
+            exit 0
+        fi
+        ;;
+esac

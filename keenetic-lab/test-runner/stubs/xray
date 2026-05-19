@@ -1,0 +1,17 @@
+#!/bin/sh
+# xray stub — имитирует xray-core для тестирования
+
+case "$1" in
+    version)
+        echo "Xray 1.8.23 (Xray, Penetration Testing) (go1.21.8 linux/amd64)"
+        echo "A unified platform for anti-censorship."
+        exit 0
+        ;;
+    run)
+        # Simulate running xray: sleep until killed (caller adds &)
+        exec sleep 86400
+        ;;
+    *)
+        exit 0
+        ;;
+esac

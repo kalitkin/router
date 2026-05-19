@@ -14,8 +14,9 @@ jobs:
   detect:
     runs-on: ubuntu-latest
     outputs:
-      bypass: ${{ steps.filter.outputs.bypass }}
-      source: ${{ steps.filter.outputs.source }}
+      bypass:   ${{ steps.filter.outputs.bypass }}
+      source:   ${{ steps.filter.outputs.source }}
+      keenetic: ${{ steps.filter.outputs.keenetic }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -35,6 +36,9 @@ jobs:
               - 'files/index.htm'
               - 'patch-ipk.sh'
               - 'Makefile'
+            keenetic:
+              - 'keenetic-lab/scripts/**'
+              - 'files/deploy-keenetic.sh'
 
   # ── ShellCheck ─────────────────────────────────────────────────────────────
   lint:
@@ -43,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install shellcheck
         run: sudo apt-get install -y shellcheck
-      - name: ShellCheck
+      - name: ShellCheck — OpenWrt scripts
         run: |
           shellcheck --severity=warning \
             patch-ipk.sh \
@@ -52,6 +56,15 @@ jobs:
             files/vpn-apply.sh \
             files/deploy.sh \
             files/build.sh
+      - name: ShellCheck — Keenetic scripts
+        run: |
+          shellcheck --severity=warning \
+            files/deploy-keenetic.sh \
+            keenetic-lab/scripts/keenetic-connect.sh \
+            keenetic-lab/scripts/keenetic-apply.sh \
+            keenetic-lab/scripts/keenetic-agent.sh \
+            keenetic-lab/scripts/install.sh \
+            keenetic-lab/scripts/S99vpn-agent
 
   # ── Сборка IPK (только при изменении исходников) ───────────────────────────
   build:
@@ -75,7 +88,7 @@ jobs:
       always() &&
       needs.lint.result == 'success' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped') &&
-      (needs.detect.outputs.bypass == 'true' || needs.detect.outputs.source == 'true')
+      (needs.detect.outputs.bypass == 'true' || needs.detect.outputs.source == 'true' || needs.detect.outputs.keenetic == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -127,4 +140,16 @@ jobs:
           cd /root/router
           git pull
           SKIP_XRAY_BUILD=1 bash files/deploy.sh
+          ENDSSH
+
+      # Keenetic-скрипты → деплоим в /keenetic/ + manifest
+      - name: Deploy Keenetic scripts
+        if: needs.detect.outputs.keenetic == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' << 'ENDSSH'
+          set -e
+          cd /root/router
+          git pull
+          bash files/deploy-keenetic.sh
           ENDSSH

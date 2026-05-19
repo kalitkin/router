@@ -1,0 +1,3 @@
+#!/bin/sh
+# modprobe stub — всегда успешно
+exit 0
