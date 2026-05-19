@@ -36,9 +36,24 @@ TPROXY_MARK=1
 TPROXY_TABLE=100
 TPROXY_CHAIN="VPN_TPROXY"
 
+# LAN bridge interface — determined at startup via detect_lan_iface()
+LAN_IFACE="br0"
+
 # ── Логирование ───────────────────────────────────────────────────────────────
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [agent] $*" >> "$LOG"; }
+
+# ── Определение LAN-интерфейса ────────────────────────────────────────────────
+
+detect_lan_iface() {
+    # Приоритет: Linux bridge type → имя начинается с br → br0
+    iface=$(ip -o link show type bridge 2>/dev/null | \
+        awk -F': ' 'NR==1{print $2}' | cut -d'@' -f1)
+    [ -z "$iface" ] && iface=$(ip link show 2>/dev/null | \
+        awk -F': ' '/^[0-9]+: br/{print $2; exit}' | cut -d'@' -f1)
+    [ -z "$iface" ] && iface="br0"
+    printf '%s' "$iface"
+}
 
 rotate_log() {
     [ ! -f "$LOG" ] && return
@@ -204,15 +219,15 @@ setup_tproxy() {
         -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "$TPROXY_MARK"
 
     # прикрепить цепочку к PREROUTING (LAN трафик)
-    iptables -t mangle -D PREROUTING -i br0 -j "$TPROXY_CHAIN" 2>/dev/null
-    iptables -t mangle -A PREROUTING -i br0 -j "$TPROXY_CHAIN"
+    iptables -t mangle -D PREROUTING -i "$LAN_IFACE" -j "$TPROXY_CHAIN" 2>/dev/null
+    iptables -t mangle -A PREROUTING -i "$LAN_IFACE" -j "$TPROXY_CHAIN"
 
-    log "TProxy active on :$TPROXY_PORT"
+    log "TProxy active on :$TPROXY_PORT (iface=$LAN_IFACE)"
 }
 
 teardown_tproxy() {
     log "tearing down TProxy rules"
-    iptables -t mangle -D PREROUTING -i br0 -j "$TPROXY_CHAIN" 2>/dev/null
+    iptables -t mangle -D PREROUTING -i "$LAN_IFACE" -j "$TPROXY_CHAIN" 2>/dev/null
     iptables -t mangle -F "$TPROXY_CHAIN" 2>/dev/null
     iptables -t mangle -X "$TPROXY_CHAIN" 2>/dev/null
     ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" 2>/dev/null
@@ -539,7 +554,9 @@ if [ -z "$MAC" ]; then
 fi
 
 MAC_ENCODED=$(printf '%s' "$MAC" | sed 's/:/%3A/g')
-log "started pid=$$ mac=$MAC"
+
+LAN_IFACE=$(detect_lan_iface)
+log "started pid=$$ mac=$MAC lan=$LAN_IFACE"
 
 # Создать нужные директории
 mkdir -p "$(dirname "$LOG")" /opt/etc/xray "$DIR"

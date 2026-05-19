@@ -179,21 +179,50 @@ install_scripts() {
 
 # ── kmod-ipt-tproxy ───────────────────────────────────────────────────────────
 
+check_tproxy_works() {
+    # Создаём тестовую цепочку и пробуем добавить правило TPROXY
+    iptables -t mangle -N __vpn_tproxy_test 2>/dev/null || return 1
+    if iptables -t mangle -A __vpn_tproxy_test -p tcp \
+        -j TPROXY --on-port 12345 --tproxy-mark 1 2>/dev/null; then
+        iptables -t mangle -F __vpn_tproxy_test 2>/dev/null
+        iptables -t mangle -X __vpn_tproxy_test 2>/dev/null
+        return 0
+    else
+        iptables -t mangle -X __vpn_tproxy_test 2>/dev/null
+        return 1
+    fi
+}
+
 load_tproxy_module() {
     if lsmod 2>/dev/null | grep -q "xt_TPROXY"; then
         info "Модуль xt_TPROXY уже загружен"
-        return 0
+    else
+        info "Загружаем xt_TPROXY..."
+        modprobe xt_TPROXY 2>/dev/null && info "  xt_TPROXY загружен" || \
+            log "  WARN: modprobe xt_TPROXY не удался"
     fi
 
-    info "Загружаем xt_TPROXY..."
-    modprobe xt_TPROXY 2>/dev/null && info "  xt_TPROXY загружен" || \
-        log "  WARN: modprobe xt_TPROXY не удался — TProxy может не работать до перезагрузки"
-
-    # Автозагрузка
+    # Автозагрузка модуля при следующей перезагрузке
     MODULES_CONF="/opt/etc/modules.d/99-tproxy"
     if [ ! -f "$MODULES_CONF" ]; then
         echo "xt_TPROXY" > "$MODULES_CONF"
-        info "  Добавлен автозапуск модуля"
+        info "  Добавлен автозапуск модуля (modules.d)"
+    fi
+
+    # Проверка что TPROXY реально работает в iptables
+    if check_tproxy_works; then
+        info "  TPROXY target: работает"
+    else
+        log ""
+        log "  ВНИМАНИЕ: TPROXY target не работает в iptables!"
+        log "  Возможные причины:"
+        log "    1. Модуль xt_TPROXY не загружен — перезагрузите роутер и повторите"
+        log "    2. KeeneticOS 5 с Fast Path (аппаратное ускорение) — отключите:"
+        log "       Веб-интерфейс → Система → Ускорение сети → выключить"
+        log "    3. iptables-nft wrapper не поддерживает TPROXY на этой прошивке"
+        log "  TProxy routing НЕ будет работать до устранения причины."
+        log ""
+        TPROXY_WARN=1
     fi
 }
 
@@ -229,6 +258,8 @@ log "=== Начало установки VPN-агента ==="
 log "Дата: $(date)"
 log "Модель: $(cat /proc/sys/keenetic/model 2>/dev/null || uname -a)"
 
+TPROXY_WARN=0
+
 check_entware
 check_internet
 fetch_manifest
@@ -248,4 +279,13 @@ echo "Для регистрации роутера запустите:"
 echo "  sh /opt/bin/keenetic-connect.sh XXXXXX"
 echo "  (XXXXXX — 6-значный код из Telegram)"
 echo ""
+
+if [ "${TPROXY_WARN:-0}" = "1" ]; then
+    echo "⚠️  ВНИМАНИЕ: TPROXY не работает!"
+    echo "   Если у вас KeeneticOS 5: отключите аппаратное ускорение сети:"
+    echo "   Веб-интерфейс → Система → Ускорение сети → выключить"
+    echo "   Затем перезагрузите роутер и запустите установку повторно."
+    echo ""
+fi
+
 echo "Лог установки: $LOG"
