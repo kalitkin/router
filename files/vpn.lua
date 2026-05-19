@@ -142,46 +142,24 @@ function action_status()
     local config_data = fs.readfile("/etc/vpn/config")
     local connected = config_data ~= nil and #config_data > 0
 
-    local vpn_up = false
-    local p = io.popen("pgrep -f xray 2>/dev/null", "r")
-    if p then
-        local out = p:read("*l")
-        p:close()
-        if out and out ~= "" then vpn_up = true end
-    end
-    if not vpn_up then
-        local p2 = io.popen("pgrep -f v2ray 2>/dev/null", "r")
-        if p2 then
-            local out2 = p2:read("*l")
-            p2:close()
-            if out2 and out2 ~= "" then vpn_up = true end
-        end
-    end
-
     local device_id = ""
     local did = fs.readfile("/etc/vpn/device_id")
     if did then device_id = did:gsub("%s+", "") end
 
-    local wan_ip = ""
-    local pr = io.popen("ip route get 8.8.8.8 2>/dev/null", "r")
-    if pr then
-        local ip_r = pr:read("*a") or ""
-        pr:close()
-        wan_ip = ip_r:match("src%s+([%d%.]+)") or ""
-    end
-
+    -- vpn_started is created/deleted by the agent — reliable VPN state indicator
     local vpn_since = 0
     local since_f = fs.readfile("/etc/vpn/vpn_started")
-    if since_f then vpn_since = math.floor(tonumber(since_f:gsub("%s+", "")) or 0) end
+    if since_f then vpn_since = tonumber(since_f:gsub("%s+", "")) or 0 end
+
+    local vpn_up = vpn_since > 0
 
     http.prepare_content("application/json")
     http.write(string.format(
-        '{"registered":%s,"connected":%s,"vpn_up":%s,"device_id":"%s","wan_ip":"%s","vpn_since":%d}',
+        '{"registered":%s,"connected":%s,"vpn_up":%s,"device_id":"%s","wan_ip":"","vpn_since":%s}',
         registered and "true" or "false",
         connected and "true" or "false",
         vpn_up and "true" or "false",
         device_id,
-        wan_ip,
-        vpn_since
+        tostring(vpn_since)
     ))
 end
