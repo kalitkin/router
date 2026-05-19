@@ -337,10 +337,11 @@
   var progPct  = document.getElementById('vpn-progress-pct');
   var progFill = document.getElementById('vpn-progress-fill');
 
-  var _pollTimer = null;
-  var _systemReady = false;  // postinst setup finished
-  var _isUpdating  = false;
-  var updateBtn    = document.getElementById('vpn-update-btn');
+  var _pollTimer    = null;
+  var _statusTimer  = null;
+  var _systemReady  = false;
+  var _isUpdating   = false;
+  var updateBtn     = document.getElementById('vpn-update-btn');
 
   // Stages that block code input
   var BUSY_STAGES = {setup:1, connecting:1, installing:1, applying:1};
@@ -497,6 +498,22 @@
     status.querySelector('span').textContent = sub || '';
   }
 
+  function fetchStatus() {
+    var xs = new XMLHttpRequest();
+    xs.open('GET', URL_STATUS);
+    xs.timeout = 8000;
+    xs.onload = function() {
+      try { updateStatus(JSON.parse(xs.responseText)); } catch(e) {}
+    };
+    xs.send();
+  }
+
+  function startStatusPoll() {
+    fetchStatus();
+    if (_statusTimer) clearInterval(_statusTimer);
+    _statusTimer = setInterval(fetchStatus, 15000);
+  }
+
   function fmtUptime(since) {
     if (!since) return '';
     var s = Math.floor(Date.now() / 1000) - since;
@@ -538,15 +555,8 @@
           return; // не проверяем статус пока идёт установка
         }
       } catch(e) { _systemReady = true; checkReady(); }
-      // Проверяем статус VPN
-      var xs = new XMLHttpRequest();
-      xs.open('GET', URL_STATUS);
-      xs.onload = function() {
-        try { updateStatus(JSON.parse(xs.responseText)); }
-        catch(e) { setStatus('', 'Не подключён', ''); }
-      };
-      xs.onerror = function() { setStatus('is-err', 'Ошибка связи', ''); };
-      xs.send();
+      // Запускаем периодический опрос статуса
+      startStatusPoll();
     };
     xp.onerror = function() { _systemReady = true; checkReady(); };
     xp.ontimeout = function() { _systemReady = true; checkReady(); };
