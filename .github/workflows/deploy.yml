@@ -102,8 +102,8 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # Handle both real newlines and literal \n (common secret storage issue)
-          printf '%s' "$SSH_KEY" | tr -d '\r' | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
+          # Key is stored as base64 to avoid PowerShell CRLF pipeline corruption
+          printf '%s' "$SSH_KEY" | base64 -d > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           echo "Key lines: $(wc -l < ~/.ssh/deploy_key)"
