@@ -100,6 +100,10 @@ jobs:
           printf '%s' "$SSH_KEY" | tr -d '\r' | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "Key lines: $(wc -l < ~/.ssh/deploy_key)"
+          echo "Key bytes: $(wc -c < ~/.ssh/deploy_key)"
+          echo "First line: $(head -1 ~/.ssh/deploy_key)"
+          echo "Last line:  $(tail -1 ~/.ssh/deploy_key)"
           ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null && echo "SSH key OK" || echo "WARNING: ssh key may be malformed"
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
