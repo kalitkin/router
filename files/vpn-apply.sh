@@ -212,12 +212,38 @@ if [ -n "$PW" ]; then
 
     uci commit "$PW"
 
+    # Включаем PassWall (main switch)
+    uci set "${PW}.@global[0].enabled=1"
+
+    # Запоминаем ноды до subscribe — чтобы найти наши новые
+    NODES_BEFORE=$(uci show "$PW" 2>/dev/null | grep "=nodes" | cut -d'.' -f2 | cut -d'=' -f1)
+
     # Обновляем подписки PassWall
     SUBSCRIBE_SH="/usr/share/${PW}/subscribe.sh"
     if [ -f "$SUBSCRIBE_SH" ]; then
         log "running $SUBSCRIBE_SH..."
         sh "$SUBSCRIBE_SH" >>"$LOG" 2>&1
+        sleep 2
     fi
+
+    # Находим первую новую ноду из нашей подписки (before/after diff)
+    NODES_AFTER=$(uci show "$PW" 2>/dev/null | grep "=nodes" | cut -d'.' -f2 | cut -d'=' -f1)
+    FIRST_NODE=""
+    for N in $NODES_AFTER; do
+        echo "$NODES_BEFORE" | grep -q "^$N$" && continue
+        FIRST_NODE="$N"
+        break
+    done
+
+    if [ -n "$FIRST_NODE" ]; then
+        uci set "${PW}.@global[0].tcp_node=$FIRST_NODE"
+        uci set "${PW}.@global[0].udp_node=$FIRST_NODE"
+        log "auto-selected node: $FIRST_NODE"
+    else
+        log "WARNING: no new nodes after subscribe — keeping existing node selection"
+    fi
+
+    uci commit "$PW"
 
     # Рестарт
     "/etc/init.d/${PW}" restart >>"$LOG" 2>&1
