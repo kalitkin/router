@@ -3,6 +3,12 @@ name: Build & Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force full deploy (bypass detect)'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-router
@@ -88,7 +94,7 @@ jobs:
       always() &&
       needs.lint.result == 'success' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped') &&
-      (needs.detect.outputs.bypass == 'true' || needs.detect.outputs.source == 'true' || needs.detect.outputs.keenetic == 'true')
+      (needs.detect.outputs.bypass == 'true' || needs.detect.outputs.source == 'true' || needs.detect.outputs.keenetic == 'true' || inputs.force_deploy == true)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
