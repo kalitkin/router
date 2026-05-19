@@ -463,10 +463,23 @@
     status.querySelector('span').textContent = sub || '';
   }
 
+  function fmtUptime(since) {
+    if (!since) return '';
+    var s = Math.floor(Date.now() / 1000) - since;
+    if (s < 60)  return s + 'с';
+    var m = Math.floor(s / 60);
+    if (m < 60)  return m + 'м';
+    var h = Math.floor(m / 60); m = m % 60;
+    if (h < 24)  return h + 'ч ' + m + 'м';
+    return Math.floor(h / 24) + 'д ' + (h % 24) + 'ч';
+  }
+
   function updateStatus(d) {
     if (d.vpn_up) {
-      setStatus('is-up', 'VPN работает',
-        'Device: ' + (d.device_id || '—').substring(0,8) + '…');
+      var sub = d.wan_ip ? 'IP: ' + d.wan_ip : '';
+      if (d.vpn_since) sub += (sub ? ' · ' : '') + 'работает ' + fmtUptime(d.vpn_since);
+      if (!sub) sub = 'Device: ' + (d.device_id || '—').substring(0, 8) + '…';
+      setStatus('is-up', 'VPN работает', sub);
     } else if (d.connected) {
       setStatus('is-wait', 'Конфиг получен, VPN не запущен',
         'Проверьте PassWall в меню Services.');

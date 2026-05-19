@@ -68,7 +68,6 @@ function action_status()
     local config_data = fs.readfile("/etc/vpn/config")
     local connected = config_data ~= nil and #config_data > 0
 
-    -- Проверяем жив ли VPN-процесс
     local vpn_up = false
     local xray_check = sys.exec("pgrep -f xray 2>/dev/null")
     if xray_check and #xray_check > 0 then vpn_up = true end
@@ -81,12 +80,24 @@ function action_status()
     local did = fs.readfile("/etc/vpn/device_id")
     if did then device_id = did:gsub("%s+", "") end
 
+    -- WAN IP (адрес на маршруте к 8.8.8.8)
+    local wan_ip = ""
+    local ip_r = sys.exec("ip route get 8.8.8.8 2>/dev/null")
+    if ip_r then wan_ip = ip_r:match("src%s+([%d%.]+)") or "" end
+
+    -- Timestamp запуска VPN для подсчёта uptime на клиенте
+    local vpn_since = 0
+    local since_f = fs.readfile("/etc/vpn/vpn_started")
+    if since_f then vpn_since = tonumber(since_f:gsub("%s+", "")) or 0 end
+
     http.prepare_content("application/json")
     http.write(string.format(
-        '{"registered":%s,"connected":%s,"vpn_up":%s,"device_id":"%s"}',
+        '{"registered":%s,"connected":%s,"vpn_up":%s,"device_id":"%s","wan_ip":"%s","vpn_since":%d}',
         registered and "true" or "false",
         connected and "true" or "false",
         vpn_up and "true" or "false",
-        device_id
+        device_id,
+        wan_ip,
+        vpn_since
     ))
 end
