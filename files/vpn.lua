@@ -137,6 +137,7 @@ rm -f /tmp/.vpn-update.sh
     http.write('{"ok":true}')
 end
 
+-- action_status: derives vpn state from vpn_started file (no shell exec)
 function action_status()
     local registered = fs.readfile("/etc/vpn/token") ~= nil
     local config_data = fs.readfile("/etc/vpn/config")
