@@ -102,8 +102,8 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # Key is stored as base64 to avoid PowerShell CRLF pipeline corruption
-          printf '%s' "$SSH_KEY" | base64 -d > ~/.ssh/deploy_key
+          # Key stored as base64 (avoids PowerShell CRLF); strip whitespace before decode
+          printf '%s' "$SSH_KEY" | tr -d ' \r\n\t' | base64 -d > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           echo "Key lines: $(wc -l < ~/.ssh/deploy_key)"
