@@ -46,11 +46,15 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [agent] $*" >> "$LOG"; }
 # ── Определение LAN-интерфейса ────────────────────────────────────────────────
 
 detect_lan_iface() {
-    # Приоритет: Linux bridge type → имя начинается с br → br0
-    iface=$(ip -o link show type bridge 2>/dev/null | \
-        awk -F': ' 'NR==1{print $2}' | cut -d'@' -f1)
-    [ -z "$iface" ] && iface=$(ip link show 2>/dev/null | \
-        awk -F': ' '/^[0-9]+: br/{print $2; exit}' | cut -d'@' -f1)
+    # Приоритет 1: интерфейс с LAN IP 192.168.x.x (работает для br0 и Bridge0)
+    iface=$(ip -o addr show 2>/dev/null | \
+        awk '/inet 192\.168\.[0-9]+\.[0-9]+/{print $2}' | head -1)
+
+    # Приоритет 2: первый bridge по типу (ядро знает тип независимо от имени)
+    [ -z "$iface" ] && iface=$(ip -o link show type bridge 2>/dev/null | \
+        awk '{print $2}' | cut -d'@' -f1 | head -1)
+
+    # Fallback: br0
     [ -z "$iface" ] && iface="br0"
     printf '%s' "$iface"
 }
