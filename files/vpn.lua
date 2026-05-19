@@ -138,6 +138,30 @@ rm -f /tmp/.vpn-update.sh
 end
 
 function action_status()
+    local registered = fs.readfile("/etc/vpn/token") ~= nil
+    local config_data = fs.readfile("/etc/vpn/config")
+    local connected = config_data ~= nil and config_data ~= ""
+
+    local device_id = ""
+    local did = fs.readfile("/etc/vpn/device_id")
+    if did then device_id = did:gsub("[%s]+", "") end
+
+    local vpn_since = 0
+    local since_f = fs.readfile("/etc/vpn/vpn_started")
+    if since_f then
+        local n = tonumber(since_f:match("%d+"))
+        if n then vpn_since = n end
+    end
+
+    local vpn_up = vpn_since > 0
+
     http.prepare_content("application/json")
-    http.write('{"registered":true,"connected":true,"vpn_up":true,"device_id":"test","wan_ip":"1.2.3.4","vpn_since":1000}')
+    http.write(
+        '{"registered":'  .. (registered and "true" or "false") ..
+        ',"connected":'   .. (connected  and "true" or "false") ..
+        ',"vpn_up":'      .. (vpn_up     and "true" or "false") ..
+        ',"device_id":"'  .. device_id .. '"' ..
+        ',"wan_ip":""'    ..
+        ',"vpn_since":'   .. tostring(vpn_since) .. '}'
+    )
 end
