@@ -89,6 +89,7 @@ if [ -f "$APPLIED_HASH_FILE" ]; then
     OLD_HASH=$(cat "$APPLIED_HASH_FILE" 2>/dev/null)
     if [ "$HASH" = "$OLD_HASH" ] && vpn_is_running; then
         log "config unchanged (hash=$HASH) and VPN running — SKIP"
+        progress "done" 100 "VPN активен!"
         exit 0
     fi
 fi
