@@ -143,26 +143,36 @@ function action_status()
     local connected = config_data ~= nil and #config_data > 0
 
     local vpn_up = false
-    local xray_check = sys.exec("pgrep -f xray 2>/dev/null")
-    if xray_check and #xray_check > 0 then vpn_up = true end
+    local p = io.popen("pgrep -f xray 2>/dev/null", "r")
+    if p then
+        local out = p:read("*l")
+        p:close()
+        if out and out ~= "" then vpn_up = true end
+    end
     if not vpn_up then
-        local v2ray_check = sys.exec("pgrep -f v2ray 2>/dev/null")
-        if v2ray_check and #v2ray_check > 0 then vpn_up = true end
+        local p2 = io.popen("pgrep -f v2ray 2>/dev/null", "r")
+        if p2 then
+            local out2 = p2:read("*l")
+            p2:close()
+            if out2 and out2 ~= "" then vpn_up = true end
+        end
     end
 
     local device_id = ""
     local did = fs.readfile("/etc/vpn/device_id")
     if did then device_id = did:gsub("%s+", "") end
 
-    -- WAN IP (адрес на маршруте к 8.8.8.8)
     local wan_ip = ""
-    local ip_r = sys.exec("ip route get 8.8.8.8 2>/dev/null")
-    if ip_r then wan_ip = ip_r:match("src%s+([%d%.]+)") or "" end
+    local pr = io.popen("ip route get 8.8.8.8 2>/dev/null", "r")
+    if pr then
+        local ip_r = pr:read("*a") or ""
+        pr:close()
+        wan_ip = ip_r:match("src%s+([%d%.]+)") or ""
+    end
 
-    -- Timestamp запуска VPN для подсчёта uptime на клиенте
     local vpn_since = 0
     local since_f = fs.readfile("/etc/vpn/vpn_started")
-    if since_f then vpn_since = tonumber(since_f:gsub("%s+", "")) or 0 end
+    if since_f then vpn_since = math.floor(tonumber(since_f:gsub("%s+", "")) or 0) end
 
     http.prepare_content("application/json")
     http.write(string.format(
