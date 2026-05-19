@@ -51,12 +51,16 @@ echo "  OK"
 echo "[3/5] IPK..."
 
 IPK_SRC=""
-for P in "$SCRIPT_DIR/../luci-app-vpnbot_"*r2*.ipk \
-         "$SCRIPT_DIR/../luci-app-vpnbot_"*.ipk \
-         /tmp/router.ipk; do
-    # убираем glob-незакрытые пути
-    [ -f "$P" ] && { IPK_SRC="$P"; break; }
-done
+# В CI (SKIP_XRAY_BUILD=1) всегда берём свежесобранный /tmp/router.ipk
+if [ "${SKIP_XRAY_BUILD:-0}" = "1" ] && [ -f /tmp/router.ipk ]; then
+    IPK_SRC=/tmp/router.ipk
+else
+    for P in "$SCRIPT_DIR/../luci-app-vpnbot_"*r2*.ipk \
+             "$SCRIPT_DIR/../luci-app-vpnbot_"*.ipk \
+             /tmp/router.ipk; do
+        [ -f "$P" ] && { IPK_SRC="$P"; break; }
+    done
+fi
 
 if [ -n "$IPK_SRC" ]; then
     cp "$IPK_SRC" "$WEB/router.ipk"

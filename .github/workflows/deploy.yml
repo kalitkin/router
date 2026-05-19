@@ -40,6 +40,7 @@ jobs:
               - 'files/xray-fetch.init'
               - 'files/vpn.lua'
               - 'files/index.htm'
+              - 'files/deploy.sh'
               - 'patch-ipk.sh'
               - 'Makefile'
             keenetic:
