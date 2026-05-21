@@ -102,7 +102,8 @@ echo "$TOKEN" > "$DIR/token.tmp" && mv "$DIR/token.tmp" "$DIR/token"
 echo "$SECRET" > "$DIR/secret.tmp" && mv "$DIR/secret.tmp" "$DIR/secret"
 echo "$DEVICE_ID" > "$DIR/device_id.tmp" && mv "$DIR/device_id.tmp" "$DIR/device_id"
 echo "$MAC" > "$DIR/mac"
-chmod 600 "$DIR/token" "$DIR/secret"
+chmod 600 "$DIR/token" "$DIR/secret" 2>/dev/null || true
+
 
 log "OK: registered device_id=$DEVICE_ID"
 progress "connecting" 60 "Регистрация успешна..."
@@ -110,6 +111,7 @@ progress "connecting" 60 "Регистрация успешна..."
 # Если конфиг пришёл сразу — сохраняем и применяем
 if [ -n "$CONFIG" ] && [ "$CONFIG" != "null" ] && [ "$CONFIG" != "" ]; then
     echo "$CONFIG" > "$DIR/config.tmp" && mv "$DIR/config.tmp" "$DIR/config"
+    chmod 600 "$DIR/config" 2>/dev/null || true
     log "OK: config received immediately, applying..."
     progress "connecting" 70 "Применяем конфиг..."
     SHOW_VPN_PROGRESS=1 /usr/bin/vpn-apply.sh 2>>"$LOG" &

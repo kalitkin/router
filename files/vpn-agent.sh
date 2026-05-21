@@ -150,12 +150,21 @@ check_vpn_health() {
 check_bypass_update() {
     CHANGED=0
     for F in bypass_domains.txt bypass_ips.txt; do
-        NEW=$(curl -s -m 15 "$BYPASS_URL/$F" 2>/dev/null)
-        [ -z "$NEW" ] && continue
-        OLD=$(cat "$DIR/$F" 2>/dev/null)
-        [ "$NEW" = "$OLD" ] && continue
-        printf '%s\n' "$NEW" > "$DIR/$F.tmp" && mv "$DIR/$F.tmp" "$DIR/$F"
-        log "bypass updated: $F"
+        TMPF="$DIR/${F}.tmp"
+        if ! curl -s -m 15 -o "$TMPF" "$BYPASS_URL/$F" 2>/dev/null || [ ! -s "$TMPF" ]; then
+            rm -f "$TMPF"; continue
+        fi
+        cmp -s "$TMPF" "$DIR/$F" 2>/dev/null && { rm -f "$TMPF"; continue; }
+        EXPECTED_SHA=$(curl -s -m 10 "$BYPASS_URL/${F}.sha256" 2>/dev/null | tr -d '[:space:]')
+        if [ -n "$EXPECTED_SHA" ]; then
+            ACTUAL_SHA=$(sha256sum "$TMPF" | cut -d' ' -f1)
+            if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+                log "bypass $F: SHA256 MISMATCH (expected=$EXPECTED_SHA actual=$ACTUAL_SHA) — skipping"
+                rm -f "$TMPF"; continue
+            fi
+        fi
+        mv "$TMPF" "$DIR/$F"
+        log "bypass updated: $F (sha256 ok)"
         CHANGED=1
     done
 
@@ -180,7 +189,7 @@ if [ ! -f "$DIR/token" ]; then
     exit 0
 fi
 
-chmod 600 "$DIR/token" "$DIR/secret" 2>/dev/null || true
+chmod 600 "$DIR/token" "$DIR/secret" "$DIR/config" 2>/dev/null || true
 
 SECRET=$(cat "$DIR/secret" 2>/dev/null || echo "")
 MAC=""

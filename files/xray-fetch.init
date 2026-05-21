@@ -72,8 +72,20 @@ start() {
             echo "[$(date '+%H:%M:%S')] xray-fetch: opkg failed, trying CDN fallback..." >> "$LOG"
             CDN_BIN="${XRAY_CDN}/${ARCH}/xray"
             if curl -s -m 90 -o /usr/bin/xray "$CDN_BIN" 2>>"$LOG" && [ -s /usr/bin/xray ]; then
-                chmod +x /usr/bin/xray
-                echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok (CDN)" >> "$LOG"
+                EXPECTED_SHA=$(curl -s -m 10 "${CDN_BIN}.sha256" 2>/dev/null | tr -d '[:space:]')
+                if [ -n "$EXPECTED_SHA" ]; then
+                    ACTUAL_SHA=$(sha256sum /usr/bin/xray | cut -d' ' -f1)
+                    if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+                        rm -f /usr/bin/xray
+                        echo "[$(date '+%H:%M:%S')] xray-fetch: SHA256 MISMATCH — binary removed" >> "$LOG"
+                    else
+                        chmod +x /usr/bin/xray
+                        echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok (CDN, sha256 ok)" >> "$LOG"
+                    fi
+                else
+                    chmod +x /usr/bin/xray
+                    echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core installed ok (CDN, no sha256)" >> "$LOG"
+                fi
             else
                 rm -f /usr/bin/xray
                 echo "[$(date '+%H:%M:%S')] xray-fetch: xray-core install failed (opkg + CDN)" >> "$LOG"

@@ -41,6 +41,11 @@ done
 chmod +x "$WEB/router/"*.sh "$WEB/router/"*.init 2>/dev/null || true
 chmod 644 "$WEB/router/"*.txt "$WEB/router/"*.lua "$WEB/router/"*.htm 2>/dev/null || true
 
+for BPFILE in bypass_ips.txt bypass_domains.txt; do
+    sha256sum "$WEB/router/$BPFILE" | cut -d' ' -f1 > "$WEB/router/${BPFILE}.sha256"
+    chmod 644 "$WEB/router/${BPFILE}.sha256"
+done
+
 cp "$SCRIPT_DIR/build.sh" /root/vpn-scripts/build.sh
 chmod +x /root/vpn-scripts/build.sh
 

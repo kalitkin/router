@@ -204,7 +204,7 @@ if [ -n "$PW" ]; then
     uci set "${PW}.vpn_sub=subscribe_list"
     uci set "${PW}.vpn_sub.remark=VPN Bot"
     uci set "${PW}.vpn_sub.url=$CONFIG"
-    uci set "${PW}.vpn_sub.allowInsecure=1"
+    uci set "${PW}.vpn_sub.allowInsecure=0"
 
     # Bypass
     wait $BYPASS_PID 2>/dev/null
