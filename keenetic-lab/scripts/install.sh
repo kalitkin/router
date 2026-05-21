@@ -177,6 +177,16 @@ install_scripts() {
     info "  $INITD/S99vpn-agent — OK"
 }
 
+# ── Определение версии KeeneticOS ─────────────────────────────────────────────
+
+is_os5() {
+    # Bridge0 (с большой B) — специфичный для OS5 именование LAN bridge
+    ip link show Bridge0 > /dev/null 2>&1 && return 0
+    # PPE/hwnat модуль — признак Fast Path в OS5
+    lsmod 2>/dev/null | grep -qiE 'kpp_hwnat|ppe_fast|hwnat' && return 0
+    return 1
+}
+
 # ── kmod-ipt-tproxy ───────────────────────────────────────────────────────────
 
 check_tproxy_works() {
@@ -224,6 +234,13 @@ load_tproxy_module() {
         log ""
         TPROXY_WARN=1
     fi
+
+    # На OS5 iptables работает, но Fast Path обходит цепочки для LAN-трафика.
+    # check_tproxy_works() вернёт OK, поэтому предупреждаем отдельно.
+    if is_os5; then
+        log "  Обнаружен KeeneticOS 5 — аппаратное ускорение может блокировать TPROXY"
+        FASTPATH_WARN=1
+    fi
 }
 
 # ── Проверка установки ────────────────────────────────────────────────────────
@@ -259,6 +276,7 @@ log "Дата: $(date)"
 log "Модель: $(cat /proc/sys/keenetic/model 2>/dev/null || uname -a)"
 
 TPROXY_WARN=0
+FASTPATH_WARN=0
 
 check_entware
 check_internet
@@ -281,10 +299,20 @@ echo "  (XXXXXX — 6-значный код из Telegram)"
 echo ""
 
 if [ "${TPROXY_WARN:-0}" = "1" ]; then
-    echo "⚠️  ВНИМАНИЕ: TPROXY не работает!"
-    echo "   Если у вас KeeneticOS 5: отключите аппаратное ускорение сети:"
-    echo "   Веб-интерфейс → Система → Ускорение сети → выключить"
-    echo "   Затем перезагрузите роутер и запустите установку повторно."
+    echo "ВНИМАНИЕ: TPROXY не работает!"
+    echo "   Возможные причины:"
+    echo "   1. KeeneticOS 5 с Fast Path: Система -> Ускорение сети -> выключить"
+    echo "   2. Модуль xt_TPROXY не загружен — перезагрузите роутер"
+    echo "   VPN не будет туннелировать трафик до устранения причины."
+    echo ""
+fi
+
+if [ "${FASTPATH_WARN:-0}" = "1" ]; then
+    echo "ВАЖНО: Обнаружен KeeneticOS 5!"
+    echo "   Аппаратное ускорение (Fast Path) обходит iptables и блокирует VPN."
+    echo "   Отключите его ДО первого запуска агента:"
+    echo "   Веб-интерфейс -> Система -> Ускорение сети -> выключить"
+    echo "   Затем: перезагрузите роутер."
     echo ""
 fi
 
