@@ -66,8 +66,8 @@ fi
 
 | MemTotal | zram | Размер |
 |----------|------|--------|
-| ≤32MB   | ДА   | 50% RAM |
-| ≤64MB   | ДА   | 35% RAM |
+| ≤32MB   | ДА   | 35% RAM |
+| ≤64MB   | ДА   | 30% RAM |
 | ≤128MB  | ДА   | 15% RAM |
 | >128MB  | НЕТ  | — |
 
@@ -76,11 +76,12 @@ fi
 opkg list-installed 2>/dev/null | grep -q "^zram-swap" || opkg install zram-swap
 ```
 
-Размер zram задаётся через UCI:
+Размер zram задаётся через UCI. Порядок важен — stop перед изменением конфига:
 ```sh
+/etc/init.d/zram-swap stop 2>/dev/null || true
 uci set zram-swap.@zram-swap[0].size="$ZRAM_MB"
 uci commit zram-swap
-/etc/init.d/zram-swap restart
+/etc/init.d/zram-swap start
 /etc/init.d/zram-swap enable
 ```
 
@@ -91,7 +92,7 @@ uci commit zram-swap
 touch /etc/vpn/.bootstrap_done
 ```
 
-xray-fetch.init при загрузке не ждёт этот файл (boot и install — разные временные контексты), но другие компоненты могут использовать его для проверки.
+xray-fetch.init при загрузке **не ждёт** этот файл — boot и postinst это разные временные контексты, race condition между ними невозможна. Sentinel сохраняется для диагностики и будущих компонентов.
 
 ---
 
