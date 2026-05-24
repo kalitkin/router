@@ -37,7 +37,8 @@ echo "[1/4] Сборка data.tar.gz (актуальные файлы из files
 # Shell-скрипты
 install -D -m 755 "$FILES_DIR/vpn-connect.sh" "$TMPDIR/data/usr/bin/vpn-connect.sh"
 install -D -m 755 "$FILES_DIR/vpn-agent.sh"   "$TMPDIR/data/usr/bin/vpn-agent.sh"
-install -D -m 755 "$FILES_DIR/vpn-apply.sh"   "$TMPDIR/data/usr/bin/vpn-apply.sh"
+install -D -m 755 "$FILES_DIR/vpn-apply.sh"      "$TMPDIR/data/usr/bin/vpn-apply.sh"
+install -D -m 755 "$FILES_DIR/vpn-bootstrap.sh" "$TMPDIR/data/usr/bin/vpn-bootstrap.sh"
 
 # Init.d
 install -D -m 755 "$FILES_DIR/vpn-agent.init"  "$TMPDIR/data/etc/init.d/vpn-agent"
@@ -140,6 +141,15 @@ if [ -n "$OWRT_ARCH" ]; then
     opkg update >> "$LOG" 2>&1 || true
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
+    # Bootstrap: RAM профиль + zram (запускается до PassWall)
+    if [ -x /usr/bin/vpn-bootstrap.sh ]; then
+        echo "[$(date '+%H:%M:%S')] vpn-setup: running bootstrap" >> "$LOG"
+        progress "setup" 40 "Настройка профиля..."
+        /usr/bin/vpn-bootstrap.sh
+    fi
+    PROFILE=$(cat /etc/vpn/profile 2>/dev/null || echo "normal")
+    echo "[$(date '+%H:%M:%S')] vpn-setup: profile=$PROFILE" >> "$LOG"
+
     if ! [ -f /etc/init.d/passwall ]; then
         progress "setup" 50 "Устанавливаем PassWall..."
         echo "[$(date '+%H:%M:%S')] vpn-setup: installing luci-app-passwall" >> "$LOG"
@@ -182,7 +192,7 @@ else
     echo "[$(date '+%H:%M:%S')] vpn-setup: cannot detect arch, skipping VPN client install" >> "$LOG"
 fi
 
-chmod +x /usr/bin/vpn-connect.sh /usr/bin/vpn-agent.sh /usr/bin/vpn-apply.sh 2>/dev/null
+chmod +x /usr/bin/vpn-connect.sh /usr/bin/vpn-agent.sh /usr/bin/vpn-apply.sh /usr/bin/vpn-bootstrap.sh 2>/dev/null
 /etc/init.d/xray-fetch enable 2>/dev/null
 /etc/init.d/vpn-agent enable 2>/dev/null
 rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null
