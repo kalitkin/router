@@ -212,7 +212,10 @@ fi
 
 MAC_ENCODED=$(echo "$MAC" | sed 's/:/%3A/g')
 mkdir -p "$DIR"
-log "started pid=$$ mac=$MAC"
+
+PROFILE=$(cat "$DIR/profile" 2>/dev/null || echo "normal")
+[ "$PROFILE" = "tiny" ] && BYPASS_CHECK_INTERVAL=21600
+log "started pid=$$ mac=$MAC profile=$PROFILE bypass_interval=$BYPASS_CHECK_INTERVAL"
 
 # ── ФАЗА 1: Получить конфиг (polling) ────────────────────────────────────────
 
