@@ -29,6 +29,7 @@ passwall_present() {
 }
 
 start() {
+    PROFILE=$(cat /etc/vpn/profile 2>/dev/null || echo "normal")
     passwall_ok=0
     xray_ok=0
     passwall_present && passwall_ok=1
@@ -55,7 +56,7 @@ start() {
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
     if [ "$passwall_ok" -eq 0 ]; then
-        echo "[$(date '+%H:%M:%S')] xray-fetch: installing luci-app-passwall" >> "$LOG"
+        echo "[$(date '+%H:%M:%S')] xray-fetch: installing luci-app-passwall (profile=$PROFILE)" >> "$LOG"
         if opkg install luci-app-passwall >> "$LOG" 2>&1; then
             echo "[$(date '+%H:%M:%S')] xray-fetch: PassWall installed ok" >> "$LOG"
         else
