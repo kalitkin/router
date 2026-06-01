@@ -93,6 +93,18 @@ for P in curl ca-bundle jsonfilter; do
 done
 OWRT_ARCH=$$(opkg print-architecture 2>/dev/null | awk '$$1=="arch" && $$3>=10 {print $$2}' | grep -v 'all\|noarch' | tail -1)
 if [ -n "$$OWRT_ARCH" ]; then
+    PW_OK=0
+    [ -f /etc/init.d/passwall ] && PW_OK=1
+    if [ $$PW_OK -eq 0 ]; then
+        echo "[$$(date '+%H:%M:%S')] vpn-setup: passwall CDN" >> "$$LOG"
+        CDN="https://self-music.online/packages/latest"
+        if curl -fsSL -m 60 -o /tmp/.pw.ipk "$${CDN}/common/luci-app-passwall.ipk" 2>>"$$LOG" && [ -s /tmp/.pw.ipk ]; then
+            opkg install --force-depends /tmp/.pw.ipk >> "$$LOG" 2>&1 && PW_OK=1 && echo "[$$(date '+%H:%M:%S')] vpn-setup: PassWall ok (CDN)" >> "$$LOG"
+            rm -f /tmp/.pw.ipk
+        fi
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    fi
+    if [ $$PW_OK -eq 0 ]; then
     SF="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
     REL=$$(. /etc/openwrt_release 2>/dev/null && echo "$${DISTRIB_RELEASE%.*}" || echo "24.10")
     grep -q "passwall_packages" /etc/opkg/customfeeds.conf 2>/dev/null || \
@@ -113,6 +125,7 @@ if [ -n "$$OWRT_ARCH" ]; then
             echo "[$$(date '+%H:%M:%S')] vpn-setup: PassWall install failed" >> "$$LOG"
             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         fi
+    fi
     fi
     if ! command -v xray > /dev/null 2>&1 && [ ! -x /usr/bin/xray ]; then
         echo "[$$(date '+%H:%M:%S')] vpn-setup: installing xray-core" >> "$$LOG"
