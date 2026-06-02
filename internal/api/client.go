@@ -42,17 +42,37 @@ func NewClient(baseURL, token string) *Client {
 // ── Heartbeat ──────────────────────────────────────────────────────────────────
 
 type HeartbeatReq struct {
-	IP              string `json:"ip,omitempty"`
-	FirmwareVersion string `json:"firmware_version,omitempty"`
+	IP               string         `json:"ip,omitempty"`
+	FirmwareVersion  string         `json:"firmware_version,omitempty"`
+	CurrentServer    string         `json:"current_server,omitempty"`    // active sing-box proxy
+	AvailableServers []string       `json:"available_servers,omitempty"` // all selector outbounds
+	CommandResult    *CommandResult `json:"command_result,omitempty"`    // result of last command
+}
+
+// CommandResult mirrors agent.CommandResult but lives here to avoid import cycle.
+type CommandResult struct {
+	ID      string            `json:"id"`
+	Success bool              `json:"success"`
+	Output  map[string]string `json:"output,omitempty"`
+	Error   string            `json:"error,omitempty"`
+}
+
+// Command mirrors agent.Command.
+type Command struct {
+	ID        string            `json:"id"`
+	Type      string            `json:"type"`
+	Params    map[string]string `json:"params,omitempty"`
+	ExpiresAt int64             `json:"expires_at,omitempty"`
 }
 
 type HeartbeatResp struct {
-	Status          string `json:"status"`
-	RouterID        int    `json:"router_id"`
-	Config          string `json:"config,omitempty"`
-	UpdateAvailable bool   `json:"update_available"`
-	UpdateVersion   string `json:"update_version,omitempty"`
-	UpdateURL       string `json:"update_url,omitempty"`
+	Status          string   `json:"status"`
+	RouterID        int      `json:"router_id"`
+	Config          string   `json:"config,omitempty"`
+	UpdateAvailable bool     `json:"update_available"`
+	UpdateVersion   string   `json:"update_version,omitempty"`
+	UpdateURL       string   `json:"update_url,omitempty"`
+	Command         *Command `json:"command,omitempty"` // pending command from server
 }
 
 func (c *Client) Heartbeat(ctx context.Context, req HeartbeatReq) (*HeartbeatResp, error) {

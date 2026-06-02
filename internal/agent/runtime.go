@@ -32,27 +32,34 @@ type Config struct {
 }
 
 type Agent struct {
-	cfg     Config
-	api     *api.Client
-	sb      *singbox.Manager
-	log     *log.Logger
+	cfg Config
+	api *api.Client
+	sb  *singbox.Manager
+	log *log.Logger
 
 	// reconcile state
-	mu             sync.Mutex
-	appliedHash    string
-	rollbackCount  int
-	rollbackSince  time.Time
-	safeMode       bool
-	safeModeUntil  time.Time
+	mu            sync.Mutex
+	appliedHash   string
+	rollbackCount int
+	rollbackSince time.Time
+	safeMode      bool
+	safeModeUntil time.Time
+
+	// command state
+	lastCmdID     string         // dedup: skip already-executed commands
+	lastCmdResult *CommandResult // reported on next heartbeat
+
+	// inter-loop signalling
+	forceReconcile chan struct{}
 }
 
 func New(cfg Config) *Agent {
-	logger := log.New(os.Stderr, "[vpnd] ", log.LstdFlags)
 	return &Agent{
-		cfg: cfg,
-		api: api.NewClient(cfg.BaseURL, cfg.Token),
-		sb:  singbox.NewManager(),
-		log: logger,
+		cfg:            cfg,
+		api:            api.NewClient(cfg.BaseURL, cfg.Token),
+		sb:             singbox.NewManager(),
+		log:            log.New(os.Stderr, "[vpnd] ", log.LstdFlags),
+		forceReconcile: make(chan struct{}, 1),
 	}
 }
 
@@ -64,28 +71,26 @@ func (a *Agent) Run() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	// Channel for config updates signalled by heartbeat.
+	// configCh: heartbeat → reconcile (new sub_link)
 	configCh := make(chan string, 1)
+	// cmdCh: heartbeat → commandLoop (buffer 1: one command in-flight at a time,
+	// matching the single Command field in HeartbeatResp)
+	cmdCh := make(chan *Command, 1)
 
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		a.heartbeatLoop(ctx, configCh)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		a.reconcileLoop(ctx, configCh)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		a.healthLoop(ctx)
-	}()
+	for _, fn := range []func(){
+		func() { a.heartbeatLoop(ctx, configCh, cmdCh) },
+		func() { a.reconcileLoop(ctx, configCh) },
+		func() { a.healthLoop(ctx) },
+		func() { a.commandLoop(ctx, cmdCh) },
+	} {
+		wg.Add(1)
+		go func(f func()) {
+			defer wg.Done()
+			f()
+		}(fn)
+	}
 
 	a.log.Printf("started: device=%s mac=%s", a.cfg.DeviceID, a.cfg.MAC)
 
@@ -95,7 +100,7 @@ func (a *Agent) Run() {
 	wg.Wait()
 }
 
-// localIP returns the first non-loopback IPv4 address on known interfaces.
+// localIP returns the first non-loopback IPv4 on known interfaces.
 func localIP() string {
 	for _, name := range []string{"br-lan", "eth0", "wan"} {
 		iface, err := net.InterfaceByName(name)

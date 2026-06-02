@@ -27,6 +27,16 @@ func (a *Agent) reconcileLoop(ctx context.Context, configCh <-chan string) {
 				a.log.Printf("reconcile: apply failed: %v", err)
 			}
 
+		case <-a.forceReconcile:
+			subLink := a.readSubLink()
+			if subLink == "" {
+				continue
+			}
+			a.log.Println("reconcile: forced by command")
+			if err := a.applySubLink(subLink); err != nil {
+				a.log.Printf("reconcile: apply failed: %v", err)
+			}
+
 		case <-ticker.C:
 			subLink := a.readSubLink()
 			if subLink == "" {
