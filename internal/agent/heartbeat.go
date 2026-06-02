@@ -82,11 +82,9 @@ func (a *Agent) doHeartbeat(
 	}
 
 	if resp.Config != "" {
-		// Last-write-wins: drain stale value before sending new one.
-		select {
-		case <-configCh:
-		default:
-		}
+		// Non-blocking send: if channel is full there is already a pending
+		// update queued. reconcileLoop will fetch the latest config from the
+		// server when it processes that signal, so dropping the duplicate is safe.
 		select {
 		case configCh <- resp.Config:
 		default:
