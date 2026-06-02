@@ -46,52 +46,54 @@ func (a *Agent) doHeartbeat(
 		if time.Since(*circuitOpenSince) < circuitCooldown {
 			return
 		}
-		a.log.Println("circuit breaker: probing server")
+		a.log.Println("heartbeat: circuit probing server")
 	}
 
-	req := api.HeartbeatReq{
+	resp, err := a.api.Heartbeat(ctx, api.HeartbeatReq{
 		IP:              localIP(),
 		FirmwareVersion: a.cfg.Firmware,
-	}
-
-	resp, err := a.api.Heartbeat(ctx, req)
+	})
 	if err != nil {
 		*consecutiveFails++
 		if *consecutiveFails <= 5 {
 			a.log.Printf("heartbeat fail #%d: %v", *consecutiveFails, err)
 		}
-
 		if *consecutiveFails >= circuitThreshold && !*circuitOpen {
 			*circuitOpen = true
 			*circuitOpenSince = time.Now()
-			a.log.Printf("circuit breaker OPEN after %d failures", *consecutiveFails)
+			a.log.Printf("heartbeat: circuit OPEN after %d failures", *consecutiveFails)
 		}
 		return
 	}
 
+	// Success — reset failure tracking.
 	if *consecutiveFails > 0 {
-		a.log.Printf("heartbeat recovered after %d failures", *consecutiveFails)
+		a.log.Printf("heartbeat: recovered after %d failures", *consecutiveFails)
 	}
 	*consecutiveFails = 0
 	if *circuitOpen {
 		*circuitOpen = false
-		a.log.Println("circuit breaker CLOSED")
+		a.log.Println("heartbeat: circuit CLOSED")
 	}
 
 	if resp.Status == "DENY" {
-		a.log.Println("device DENIED by server, stopping heartbeat")
+		a.log.Println("heartbeat: device DENIED by server")
 		return
 	}
 
 	if resp.Config != "" {
+		// Last-write-wins: drain stale value before sending new one.
+		select {
+		case <-configCh:
+		default:
+		}
 		select {
 		case configCh <- resp.Config:
 		default:
-			// Channel already has a pending update; drop duplicate.
 		}
 	}
 
 	if resp.UpdateAvailable {
-		a.log.Printf("OTA update available: %s — %s", resp.UpdateVersion, resp.UpdateURL)
+		a.log.Printf("heartbeat: OTA available v%s — %s", resp.UpdateVersion, resp.UpdateURL)
 	}
 }

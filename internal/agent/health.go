@@ -6,27 +6,31 @@ import (
 )
 
 func (a *Agent) healthLoop(ctx context.Context) {
-	ticker := time.NewTicker(pingInterval)
+	ticker := time.NewTicker(pingInterval * healEvery)
 	defer ticker.Stop()
 
-	cycle := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cycle++
-			if cycle%healEvery == 0 {
-				a.checkHealth()
-			}
+			a.checkHealth()
 		}
 	}
 }
 
 func (a *Agent) checkHealth() {
+	// Do not interfere while safe mode is active.
+	a.mu.Lock()
+	inSafe := a.safeMode && time.Now().Before(a.safeModeUntil)
+	a.mu.Unlock()
+	if inSafe {
+		return
+	}
+
 	// L1: process alive?
 	if !a.sb.IsRunning() {
-		a.log.Println("health L1: sing-box process dead — restarting")
+		a.log.Println("health L1: sing-box dead — restarting")
 		if err := a.sb.Restart(); err != nil {
 			a.log.Printf("health L1: restart failed: %v — rolling back", err)
 			if err := a.doRollback(); err != nil {
@@ -40,7 +44,7 @@ func (a *Agent) checkHealth() {
 
 	// L2: Clash API alive?
 	if !a.sb.IsAPIAlive() {
-		a.log.Println("health L2: Clash API not responding — restarting sing-box")
+		a.log.Println("health L2: Clash API not responding — restarting")
 		if err := a.sb.Restart(); err != nil {
 			a.log.Printf("health L2: restart failed: %v", err)
 		} else {

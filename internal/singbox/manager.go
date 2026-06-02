@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -21,10 +22,13 @@ const (
 	apiTimeout     = 3 * time.Second
 )
 
+// Manager controls the sing-box process lifecycle.
+// All public methods are safe for concurrent use.
 type Manager struct {
-	configPath  string
-	clashURL    string
-	httpClient  *http.Client
+	configPath string
+	clashURL   string
+	httpClient *http.Client
+	mu         sync.Mutex // serializes Apply/Restart/Rollback
 }
 
 func NewManager() *Manager {
@@ -35,9 +39,18 @@ func NewManager() *Manager {
 	}
 }
 
+// HasConfig reports whether a config file exists and is non-empty.
+func (m *Manager) HasConfig() bool {
+	info, err := os.Stat(m.configPath)
+	return err == nil && info.Size() > 0
+}
+
 // Apply writes a new config and attempts hot reload, falling back to restart.
-// Returns nil if sing-box is running with the new config.
+// Thread-safe: only one Apply/Restart/Rollback runs at a time.
 func (m *Manager) Apply(data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	patched, err := injectClashAPI(data)
 	if err != nil {
 		return fmt.Errorf("patch config: %w", err)
@@ -51,78 +64,43 @@ func (m *Manager) Apply(data []byte) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	// Level 1: hot reload via Clash API
-	if err := m.reload(patched); err == nil {
+	// Level 1: hot reload via Clash API.
+	if err := m.reloadLocked(patched); err == nil {
 		return nil
 	}
 
-	// Level 2: service restart
-	if err := m.Restart(); err == nil {
+	// Level 2: service restart.
+	if err := m.restartLocked(); err == nil {
 		return nil
 	}
 
-	// Level 3: rollback
-	return fmt.Errorf("apply failed: all reload strategies exhausted")
+	return fmt.Errorf("apply: all reload strategies exhausted")
 }
 
-// Reload sends new config to Clash API without restarting the process.
-func (m *Manager) reload(configData []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		m.clashURL+"/configs?force=true", bytes.NewReader(configData))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("clash API unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("clash reload: HTTP %d", resp.StatusCode)
-	}
-	return nil
-}
-
-// Restart restarts sing-box via OpenWrt init.d and waits for it to come up.
+// Restart restarts sing-box via init.d. Thread-safe.
 func (m *Manager) Restart() error {
-	cmd := exec.Command("/etc/init.d/sing-box", "restart")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sing-box restart: %w — %s", err, out)
-	}
-
-	deadline := time.Now().Add(restartTimeout)
-	for time.Now().Before(deadline) {
-		time.Sleep(2 * time.Second)
-		if m.IsRunning() {
-			return nil
-		}
-	}
-	return fmt.Errorf("sing-box did not start within %s", restartTimeout)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.restartLocked()
 }
 
-// Backup copies current config to config.json.bak.
+// Backup copies current config.json to config.json.bak atomically.
 func (m *Manager) Backup() error {
-	src := m.configPath
-	dst := m.configPath + backupSuffix
-	data, err := os.ReadFile(src)
+	data, err := os.ReadFile(m.configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("backup read: %w", err)
 	}
-	return writeAtomic(dst, data)
+	return writeAtomic(m.configPath+backupSuffix, data)
 }
 
-// Rollback restores config from .bak and restarts sing-box.
+// Rollback restores config from .bak and restarts sing-box. Thread-safe.
 func (m *Manager) Rollback() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	bak := m.configPath + backupSuffix
 	data, err := os.ReadFile(bak)
 	if err != nil {
@@ -131,16 +109,16 @@ func (m *Manager) Rollback() error {
 	if err := writeAtomic(m.configPath, data); err != nil {
 		return fmt.Errorf("rollback write: %w", err)
 	}
-	return m.Restart()
+	return m.restartLocked()
 }
 
-// IsRunning returns true if sing-box process is found.
+// IsRunning returns true if a sing-box process is alive.
 func (m *Manager) IsRunning() bool {
-	err := exec.Command("pgrep", "-x", "sing-box").Run()
-	return err == nil
+	// pgrep without -x for busybox compatibility.
+	return exec.Command("pgrep", "sing-box").Run() == nil
 }
 
-// IsAPIAlive returns true if Clash API responds to /version.
+// IsAPIAlive returns true if the Clash API responds.
 func (m *Manager) IsAPIAlive() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
 	defer cancel()
@@ -158,7 +136,50 @@ func (m *Manager) IsAPIAlive() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// injectClashAPI adds the experimental.clash_api section to the config.
+// ── internal (caller must hold m.mu) ─────────────────────────────────────────
+
+func (m *Manager) reloadLocked(configData []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		m.clashURL+"/configs?force=true", bytes.NewReader(configData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("clash API: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("clash reload: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (m *Manager) restartLocked() error {
+	cmd := exec.Command("/etc/init.d/sing-box", "restart")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("sing-box restart: %w — %s", err, out)
+	}
+
+	deadline := time.Now().Add(restartTimeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		if m.IsRunning() {
+			return nil
+		}
+	}
+	return fmt.Errorf("sing-box did not start within %s", restartTimeout)
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
 func injectClashAPI(data []byte) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -169,7 +190,6 @@ func injectClashAPI(data []byte) ([]byte, error) {
 	if exp == nil {
 		exp = map[string]any{}
 	}
-	// Only set if not already configured by server.
 	if _, exists := exp["clash_api"]; !exists {
 		exp["clash_api"] = map[string]any{
 			"external_controller": "127.0.0.1:9090",
@@ -181,7 +201,6 @@ func injectClashAPI(data []byte) ([]byte, error) {
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-// writeAtomic writes data to a temp file then renames into place.
 func writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {

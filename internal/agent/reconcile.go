@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -13,7 +14,6 @@ func (a *Agent) reconcileLoop(ctx context.Context, configCh <-chan string) {
 	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()
 
-	// Apply config from disk on startup if we have one.
 	a.applyFromDisk()
 
 	for {
@@ -22,7 +22,7 @@ func (a *Agent) reconcileLoop(ctx context.Context, configCh <-chan string) {
 			return
 
 		case subLink := <-configCh:
-			a.log.Printf("reconcile: config update from heartbeat")
+			a.log.Println("reconcile: config update from heartbeat")
 			if err := a.applySubLink(subLink); err != nil {
 				a.log.Printf("reconcile: apply failed: %v", err)
 			}
@@ -32,7 +32,7 @@ func (a *Agent) reconcileLoop(ctx context.Context, configCh <-chan string) {
 			if subLink == "" {
 				continue
 			}
-			a.log.Printf("reconcile: periodic check")
+			a.log.Println("reconcile: periodic check")
 			if err := a.applySubLink(subLink); err != nil {
 				a.log.Printf("reconcile: apply failed: %v", err)
 			}
@@ -42,17 +42,19 @@ func (a *Agent) reconcileLoop(ctx context.Context, configCh <-chan string) {
 
 func (a *Agent) applySubLink(subLink string) error {
 	a.mu.Lock()
-	if a.safeMode {
-		if time.Now().Before(a.safeModeUntil) {
-			a.mu.Unlock()
-			a.log.Println("reconcile: SAFE MODE active, skipping")
-			return nil
-		}
+	inSafe := a.safeMode && time.Now().Before(a.safeModeUntil)
+	if !inSafe && a.safeMode {
+		// Safe mode window expired — reset.
 		a.safeMode = false
 		a.rollbackCount = 0
-		a.log.Println("reconcile: SAFE MODE lifted")
+		a.log.Println("reconcile: safe mode lifted")
 	}
 	a.mu.Unlock()
+
+	if inSafe {
+		a.log.Println("reconcile: SAFE MODE — skipping")
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -63,16 +65,18 @@ func (a *Agent) applySubLink(subLink string) error {
 	}
 
 	hash := sha256hex(data)
+
 	a.mu.Lock()
-	if hash == a.appliedHash {
-		a.mu.Unlock()
-		return nil // nothing changed
-	}
+	unchanged := hash == a.appliedHash
 	a.mu.Unlock()
+
+	if unchanged {
+		return nil
+	}
 
 	a.log.Printf("reconcile: new config hash=%s…", hash[:12])
 
-	// Backup current config before touching anything.
+	// Backup the current working config before we touch anything.
 	if err := a.sb.Backup(); err != nil {
 		a.log.Printf("reconcile: backup warning: %v", err)
 	}
@@ -82,7 +86,7 @@ func (a *Agent) applySubLink(subLink string) error {
 		return a.doRollback()
 	}
 
-	// Persist sub_link and applied hash.
+	// Persist state.
 	_ = writeFile(filepath.Join(a.cfg.Dir, "config"), subLink)
 	_ = writeFile(filepath.Join(a.cfg.Dir, "applied_hash"), hash)
 
@@ -94,66 +98,71 @@ func (a *Agent) applySubLink(subLink string) error {
 	return nil
 }
 
+// applyFromDisk ensures sing-box is running on daemon startup.
 func (a *Agent) applyFromDisk() {
-	subLink := a.readSubLink()
-	if subLink == "" {
+	if !a.sb.HasConfig() {
+		a.log.Println("startup: no config on disk, waiting for server")
 		return
+	}
+
+	if stored := a.readAppliedHash(); stored != "" {
+		a.mu.Lock()
+		a.appliedHash = stored
+		a.mu.Unlock()
 	}
 
 	if a.sb.IsRunning() {
-		a.log.Println("startup: VPN already running")
-		if stored := a.readAppliedHash(); stored != "" {
-			a.mu.Lock()
-			a.appliedHash = stored
-			a.mu.Unlock()
-		}
+		a.log.Println("startup: sing-box already running")
 		return
 	}
 
-	a.log.Println("startup: VPN not running, applying config from disk")
+	a.log.Println("startup: sing-box not running — restarting")
 	if err := a.sb.Restart(); err != nil {
 		a.log.Printf("startup: restart failed: %v", err)
 	}
 }
 
+// doRollback increments the rollback counter and activates safe mode when
+// the threshold is exceeded. Safe for concurrent use.
 func (a *Agent) doRollback() error {
 	a.mu.Lock()
 	now := time.Now()
+	// Reset counter if outside the tracking window.
 	if a.rollbackSince.IsZero() || now.Sub(a.rollbackSince) > rollbackWindow {
 		a.rollbackCount = 0
 		a.rollbackSince = now
 	}
 	a.rollbackCount++
 	count := a.rollbackCount
+	if count > maxRollbacks {
+		a.safeMode = true
+		a.safeModeUntil = now.Add(safeModeWait)
+	}
 	a.mu.Unlock()
 
 	a.log.Printf("rollback #%d", count)
 
 	if count > maxRollbacks {
-		a.mu.Lock()
-		a.safeMode = true
-		a.safeModeUntil = time.Now().Add(safeModeWait)
-		a.mu.Unlock()
-		a.log.Printf("SAFE MODE: too many rollbacks (%d in %s), pausing reconcile for %s",
+		a.log.Printf("SAFE MODE: %d rollbacks in %s — pausing reconcile for %s",
 			count, rollbackWindow, safeModeWait)
-		return fmt.Errorf("safe mode activated")
+		return fmt.Errorf("safe mode activated after %d rollbacks", count)
 	}
 
 	if err := a.sb.Rollback(); err != nil {
 		return fmt.Errorf("rollback: %w", err)
 	}
-	a.log.Println("rollback: success")
+	a.log.Println("rollback: restored previous config")
 	return nil
 }
 
 func (a *Agent) readSubLink() string {
 	data, _ := os.ReadFile(filepath.Join(a.cfg.Dir, "config"))
-	return string(data)
+	return strings.TrimSpace(string(data))
 }
 
 func (a *Agent) readAppliedHash() string {
 	data, _ := os.ReadFile(filepath.Join(a.cfg.Dir, "applied_hash"))
-	return string(data)
+	return strings.TrimSpace(string(data))
 }
 
 func sha256hex(data []byte) string {
