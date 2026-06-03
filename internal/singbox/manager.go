@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -30,6 +32,7 @@ type Manager struct {
 	clashURL   string
 	httpClient *http.Client
 	mu         sync.Mutex // serializes Apply/Restart/Rollback
+	log        *log.Logger
 }
 
 func NewManager() *Manager {
@@ -37,6 +40,7 @@ func NewManager() *Manager {
 		configPath: configPath,
 		clashURL:   clashAPIURL,
 		httpClient: &http.Client{Timeout: apiTimeout},
+		log:        log.New(os.Stderr, "[singbox] ", log.LstdFlags),
 	}
 }
 
@@ -253,10 +257,64 @@ func (m *Manager) restartLocked() error {
 	for time.Now().Before(deadline) {
 		time.Sleep(2 * time.Second)
 		if m.IsRunning() {
+			if err := m.SetupRouting(); err != nil {
+				m.log.Printf("routing setup after restart: %v", err)
+			}
 			return nil
 		}
 	}
 	return fmt.Errorf("sing-box did not start within %s", restartTimeout)
+}
+
+// ── routing ───────────────────────────────────────────────────────────────────
+
+// SetupRouting configures kernel ip rules and table 2022 for VPN forwarding.
+// Must be called after every sing-box (re)start. Safe to call concurrently.
+//
+// Routing scheme:
+//   - table 2022: default dev sing-tun  (all traffic → VPN)
+//   - ip rule prio 100:  fwmark 0x64 → main  (sing-box outbound bypasses VPN)
+//   - ip rule prio 2022: not fwmark 0x64 → table 2022  (LAN + router → VPN)
+//
+// When sing-box is down and table 2022 is empty, the kernel falls through to
+// the main table, giving fail-open internet access via the physical WAN.
+func (m *Manager) SetupRouting() error {
+	const (
+		tunIface    = "sing-tun"
+		table       = "2022"
+		prioBypass  = "100"
+		prioVPN     = "2022"
+		waitTimeout = 10 * time.Second
+	)
+
+	deadline := time.Now().Add(waitTimeout)
+	for {
+		if _, err := net.InterfaceByName(tunIface); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s did not appear within %s", tunIface, waitTimeout)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Flush stale routes, then add fresh default via sing-tun.
+	exec.Command("ip", "route", "flush", "table", table).Run()
+	if out, err := exec.Command(
+		"ip", "route", "add", "default", "dev", tunIface, "table", table,
+	).CombinedOutput(); err != nil {
+		return fmt.Errorf("add default via %s table %s: %w — %s", tunIface, table, err, out)
+	}
+
+	// Delete stale rules at our priorities, then re-add.
+	exec.Command("ip", "rule", "del", "priority", prioBypass).Run()
+	exec.Command("ip", "rule", "del", "priority", prioVPN).Run()
+	exec.Command("ip", "rule", "add", "fwmark", "0x64", "priority", prioBypass, "table", "main").Run()
+	exec.Command("ip", "rule", "add", "not", "fwmark", "0x64", "priority", prioVPN, "table", table).Run()
+
+	m.log.Printf("routing: table %s default via %s, rules prio %s/%s ready",
+		table, tunIface, prioBypass, prioVPN)
+	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -286,7 +344,10 @@ func patchRouterConfig(data []byte) ([]byte, error) {
 	}
 	cfg["experimental"] = exp
 
-	// TUN stack: gvisor
+	// TUN inbound: force gvisor stack; disable auto_route.
+	// auto_route is disabled because we manage kernel routing explicitly —
+	// OpenWrt's fw4 resets routing tables on interface events, making
+	// sing-box's auto-created table 2022 unreliable. SetupRouting() handles it.
 	if inbounds, ok := cfg["inbounds"].([]any); ok {
 		for _, ib := range inbounds {
 			ibMap, ok := ib.(map[string]any)
@@ -294,6 +355,7 @@ func patchRouterConfig(data []byte) ([]byte, error) {
 				continue
 			}
 			if ibMap["type"] == "tun" {
+				ibMap["auto_route"] = false
 				if _, exists := ibMap["stack"]; !exists {
 					ibMap["stack"] = "gvisor"
 				}

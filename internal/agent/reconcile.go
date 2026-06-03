@@ -136,6 +136,9 @@ func (a *Agent) applyFromDisk() {
 
 	if a.sb.IsRunning() {
 		a.log.Println("startup: sing-box already running")
+		if err := a.sb.SetupRouting(); err != nil {
+			a.log.Printf("startup: routing: %v", err)
+		}
 		return
 	}
 
