@@ -2,13 +2,18 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r11:
+#   - vpnd: BusyBox ip compat — добавляет "2022 vpn" в /etc/iproute2/rt_tables
+#   - vpnd: semanticHash стрипает short_id/fingerprint/utls (меньше лишних Apply)
+#   - vpnd: исправлен unused "strings" import (CI go vet ранее падал)
+#
 # Изменения v1.3.0-r10:
 #   - patchRouterConfig: interrupt_exist_connections=false (switch не роняет LAN)
 #   - postinst: nftables forward_lan → sing-tun (fw4 policy drop) + persist файл
 #   - postinst: fallback arch detection через DISTRIB_ARCH из openwrt_release
 #
 # Использование:
-#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r10_all.ipk
+#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r11_all.ipk
 #   ./patch-ipk.sh output.ipk   # указать имя результата
 ###############################################################################
 
@@ -16,11 +21,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r10_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r11_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="10"
+PKG_RELEASE="11"
 
 CDN="https://self-music.online/packages/latest"
 

@@ -204,10 +204,9 @@ func sha256hex(data []byte) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// semanticHash hashes the config after stripping volatile TLS fields.
-// Marzban rotates tls.server_name on every subscription fetch for anti-DPI
-// diversity — across ALL outbound types, not just Reality. We want sing-box
-// to reload only when server/port/uuid actually change.
+// semanticHash hashes the config after stripping all volatile anti-DPI fields.
+// Marzban rotates these on every subscription fetch for traffic diversity;
+// sing-box should reload only when server/port/uuid actually change.
 // Falls back to sha256hex on parse error.
 func semanticHash(data []byte) string {
 	var cfg map[string]any
@@ -224,9 +223,12 @@ func semanticHash(data []byte) string {
 			if !ok {
 				continue
 			}
-			// Strip server_name unconditionally — Marzban rotates it on all
-			// outbound types (Reality and plain TLS alike) for anti-DPI.
-			delete(tls, "server_name")
+			delete(tls, "server_name") // rotated on all outbound types
+			delete(tls, "fingerprint") // TLS fingerprint diversification
+			delete(tls, "utls")        // entire utls block (fingerprint settings)
+			if reality, ok := tls["reality"].(map[string]any); ok {
+				delete(reality, "short_id") // Reality short_id rotated per-fetch
+			}
 		}
 	}
 	normalized, err := json.Marshal(cfg)

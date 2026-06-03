@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -329,6 +328,17 @@ func (m *Manager) SetupRouting() error {
 			return fmt.Errorf("%s did not appear within %s", tunIface, waitTimeout)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+
+	// BusyBox ip requires routing table names in /etc/iproute2/rt_tables.
+	// sing-box uses netlink directly, so it can write to table 2022 without this,
+	// but our ip(8) calls fail unless the table is named.
+	const rtTablesPath = "/etc/iproute2/rt_tables"
+	if data, err := os.ReadFile(rtTablesPath); err == nil && !bytes.Contains(data, []byte("2022")) {
+		if f, err := os.OpenFile(rtTablesPath, os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+			fmt.Fprintf(f, "2022\tvpn\n")
+			f.Close()
+		}
 	}
 
 	// Flush stale routes, then add fresh default via sing-tun.
