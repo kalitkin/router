@@ -16,6 +16,9 @@ start_service() {
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
+    # Cap Go heap at 20MB so GC fires before OOM killer does.
+    # Without this, Go runtime grows heap to 2x live set before collecting.
+    procd_set_param env GOMEMLIMIT=20971520
     procd_close_instance
 }
 
