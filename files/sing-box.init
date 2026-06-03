@@ -12,13 +12,13 @@ start_service() {
     [ -f "$CONF" ] || return 0
     mkdir -p /var/lib/sing-box
     procd_open_instance sing-box
-    procd_set_param command "$PROG" run -c "$CONF"
+    # /usr/bin/env sets GOMEMLIMIT before exec-ing sing-box.
+    # procd_set_param env is not supported on all OpenWrt versions.
+    # GOMEMLIMIT=20MiB caps Go heap so GC fires before OOM killer does.
+    procd_set_param command /usr/bin/env GOMEMLIMIT=20971520 "$PROG" run -c "$CONF"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
-    # Cap Go heap at 20MB so GC fires before OOM killer does.
-    # Without this, Go runtime grows heap to 2x live set before collecting.
-    procd_set_param env GOMEMLIMIT=20971520
     procd_close_instance
 }
 

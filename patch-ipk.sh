@@ -27,11 +27,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r13_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r14_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="13"
+PKG_RELEASE="14"
 
 CDN="https://self-music.online/packages/latest"
 
