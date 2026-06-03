@@ -84,13 +84,28 @@ func (a *Agent) applySubLink(subLink string) error {
 	a.mu.Unlock()
 
 	if unchanged {
+		// If sing-box was OOM-killed and restarted by healthLoop, the selector
+		// resets to default. Restore the saved selection on every reconcile tick.
+		if saved := a.readSavedServer(); saved != "" {
+			if current, _ := a.sb.CurrentServer(); current != saved {
+				if err := a.sb.SwitchServer(saved); err != nil {
+					a.log.Printf("reconcile: restore selector %q: %v", saved, err)
+				} else {
+					a.log.Printf("reconcile: restored selector to %q", saved)
+				}
+			}
+		}
 		return nil
 	}
 
 	a.log.Printf("reconcile: new config hash=%s…", hash[:12])
 
-	// Remember which server the user selected before we touch anything.
-	prevServer, _ := a.sb.CurrentServer()
+	// Use disk-saved server (written on switch command) — more reliable than
+	// querying the live API after a health-triggered restart that reset the selector.
+	prevServer := a.readSavedServer()
+	if prevServer == "" {
+		prevServer, _ = a.sb.CurrentServer()
+	}
 
 	// Backup the current working config before we touch anything.
 	if err := a.sb.Backup(); err != nil {
@@ -147,6 +162,7 @@ func (a *Agent) applyFromDisk() {
 				a.log.Printf("startup: routing: %v", err)
 			}
 		}
+		a.restoreServer()
 		return
 	}
 
@@ -154,6 +170,7 @@ func (a *Agent) applyFromDisk() {
 	if err := a.sb.Restart(); err != nil {
 		a.log.Printf("startup: restart failed: %v", err)
 	}
+	a.restoreServer()
 }
 
 // doRollback increments the rollback counter and activates safe mode when
@@ -197,6 +214,23 @@ func (a *Agent) readSubLink() string {
 func (a *Agent) readAppliedHash() string {
 	data, _ := os.ReadFile(filepath.Join(a.cfg.Dir, "applied_hash"))
 	return strings.TrimSpace(string(data))
+}
+
+func (a *Agent) readSavedServer() string {
+	data, _ := os.ReadFile(filepath.Join(a.cfg.Dir, "current_server"))
+	return strings.TrimSpace(string(data))
+}
+
+func (a *Agent) restoreServer() {
+	saved := a.readSavedServer()
+	if saved == "" {
+		return
+	}
+	if err := a.sb.SwitchServer(saved); err != nil {
+		a.log.Printf("restore server %q: %v", saved, err)
+		return
+	}
+	a.log.Printf("restore server: %q", saved)
 }
 
 func sha256hex(data []byte) string {

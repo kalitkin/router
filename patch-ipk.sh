@@ -2,12 +2,14 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
-# Изменения v1.3.0-r11:
-#   - vpnd: BusyBox ip compat — добавляет "2022 vpn" в /etc/iproute2/rt_tables
-#   - vpnd: semanticHash стрипает short_id/fingerprint/utls (меньше лишних Apply)
-#   - vpnd: исправлен unused "strings" import (CI go vet ранее падал)
+# Изменения v1.3.0-r12:
+#   - vpnd: сохраняет выбранный сервер в /etc/vpn/current_server при switch
+#   - vpnd: восстанавливает сервер после любого рестарта sing-box (OOM, health L1/L2, startup)
+#   - vpnd: reconcile восстанавливает selector если hash не изменился но сервер сбросился
+#   - postinst/nft: ICMP bypass rule (mark 0x64) — sing-box не поддерживает ICMP,
+#     теперь ICMP идёт напрямую без VPN, не флудит syslog, не нагружает gVisor RAM
 #
-# Изменения v1.3.0-r10:
+# Изменения v1.3.0-r11:
 #   - patchRouterConfig: interrupt_exist_connections=false (switch не роняет LAN)
 #   - postinst: nftables forward_lan → sing-tun (fw4 policy drop) + persist файл
 #   - postinst: fallback arch detection через DISTRIB_ARCH из openwrt_release
@@ -21,11 +23,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r11_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r12_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="11"
+PKG_RELEASE="12"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -194,11 +196,19 @@ rm -rf /tmp/luci-modulecache 2>/dev/null
 # rule survives firewall reloads (netifd triggers reload on iface events).
 if command -v nft >/dev/null 2>&1; then
     mkdir -p /etc/nftables.d
-    echo 'add rule inet fw4 forward_lan oifname "sing-tun" accept comment "vpnd"' \
-        > /etc/nftables.d/99-vpnd.nft
+    # Rule 1: allow br-lan → sing-tun forwarding (fw4 policy drop)
+    # Rule 2: bypass VPN for ICMP — sing-box can't proxy ICMP, gVisor accumulates
+    #         connection state from ICMP flood → OOM. Mark ICMP with 0x64 so it
+    #         takes the main table route (direct) instead of table 2022 (VPN).
+    cat > /etc/nftables.d/99-vpnd.nft << 'NFTEOF'
+add rule inet fw4 forward_lan oifname "sing-tun" accept comment "vpnd"
+add rule inet fw4 prerouting meta l4proto { icmp, ipv6-icmp } mark set 0x64 comment "vpnd-icmp-bypass"
+NFTEOF
     nft list chain inet fw4 forward_lan 2>/dev/null | grep -q 'sing-tun' || \
         nft insert rule inet fw4 forward_lan oifname "sing-tun" accept 2>/dev/null || true
-    log "nft: forward_lan → sing-tun done"
+    nft list chain inet fw4 prerouting 2>/dev/null | grep -q 'vpnd-icmp-bypass' || \
+        nft insert rule inet fw4 prerouting meta l4proto '{ icmp, ipv6-icmp }' mark set 0x64 2>/dev/null || true
+    log "nft: forward_lan + icmp-bypass done"
 fi
 
 progress "ready" 100 ""

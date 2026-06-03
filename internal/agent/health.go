@@ -38,6 +38,7 @@ func (a *Agent) checkHealth() {
 			}
 		} else {
 			a.log.Println("health L1: sing-box recovered")
+			a.restoreServer()
 			// Reset L2 counter — the process was just (re)started, Clash API
 			// needs a moment to come up. A stale counter would trigger an
 			// unnecessary L2 restart on the very next health tick.
@@ -66,6 +67,7 @@ func (a *Agent) checkHealth() {
 				a.log.Printf("health L2: restart failed: %v", err)
 			} else {
 				a.log.Println("health L2: sing-box restarted")
+				a.restoreServer()
 			}
 		}
 	} else {

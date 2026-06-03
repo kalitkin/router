@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -54,6 +55,7 @@ func (a *Agent) executeCommand(cmd *Command) CommandResult {
 			return failResult(cmd.ID, err.Error())
 		}
 		output["server"] = server
+		_ = writeFile(filepath.Join(a.cfg.Dir, "current_server"), server)
 		a.log.Printf("command %s: switched to %s", cmd.ID, server)
 
 	case "restart":
