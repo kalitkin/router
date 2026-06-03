@@ -2,14 +2,13 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
-# Изменения v1.3.0-r8:
-#   - Возврат к Lua UI (vpn.lua + index.htm) — красивый интерфейс с OTA, логами
-#   - Depends: добавлены luci-lua-runtime + curl
-#   - vpn.lua адаптирован под vpnd/sing-box (убраны PassWall/xray)
-#   - curl вместо uclient-fetch в vpn-connect.sh
+# Изменения v1.3.0-r10:
+#   - patchRouterConfig: interrupt_exist_connections=false (switch не роняет LAN)
+#   - postinst: nftables forward_lan → sing-tun (fw4 policy drop) + persist файл
+#   - postinst: fallback arch detection через DISTRIB_ARCH из openwrt_release
 #
 # Использование:
-#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r8_all.ipk
+#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r10_all.ipk
 #   ./patch-ipk.sh output.ipk   # указать имя результата
 ###############################################################################
 
@@ -17,11 +16,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r9_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r10_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="9"
+PKG_RELEASE="10"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -132,6 +131,8 @@ fi
 
 # ── 2. Архитектура ────────────────────────────────────────────────────
 OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {print \$2}' | grep -v 'all\|noarch' | tail -1)
+# Fallback: читаем DISTRIB_ARCH из /etc/openwrt_release
+[ -z "\$OWRT_ARCH" ] && OWRT_ARCH=\$(grep 'DISTRIB_ARCH' /etc/openwrt_release 2>/dev/null | cut -d'"' -f2)
 log "arch=\$OWRT_ARCH"
 
 # ── 3. vpnd ───────────────────────────────────────────────────────────
@@ -182,6 +183,18 @@ mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 
 rm -f /tmp/luci-indexcache* 2>/dev/null
 rm -rf /tmp/luci-modulecache 2>/dev/null
+
+# ── 6. Firewall — fw4 forward chain has policy drop ──────────────────
+# Allow br-lan → sing-tun forwarding. Write persistent include so the
+# rule survives firewall reloads (netifd triggers reload on iface events).
+if command -v nft >/dev/null 2>&1; then
+    mkdir -p /etc/nftables.d
+    echo 'add rule inet fw4 forward_lan oifname "sing-tun" accept comment "vpnd"' \
+        > /etc/nftables.d/99-vpnd.nft
+    nft list chain inet fw4 forward_lan 2>/dev/null | grep -q 'sing-tun' || \
+        nft insert rule inet fw4 forward_lan oifname "sing-tun" accept 2>/dev/null || true
+    log "nft: forward_lan → sing-tun done"
+fi
 
 progress "ready" 100 ""
 log "=== vpnd-setup done ==="

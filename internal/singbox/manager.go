@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -402,6 +403,22 @@ func patchRouterConfig(data []byte) ([]byte, error) {
 	}
 	route["default_mark"] = 100
 	cfg["route"] = route
+
+	// interrupt_exist_connections: false on all outbounds.
+	// Marzban sets this to true on selector/urltest, which drops ALL active
+	// connections on the router when switching servers — kills every LAN client.
+	if outbounds, ok := cfg["outbounds"].([]any); ok {
+		for _, ob := range outbounds {
+			obMap, ok := ob.(map[string]any)
+			if !ok {
+				continue
+			}
+			obType, _ := obMap["type"].(string)
+			if obType == "selector" || obType == "urltest" {
+				obMap["interrupt_exist_connections"] = false
+			}
+		}
+	}
 
 	return json.MarshalIndent(cfg, "", "  ")
 }
