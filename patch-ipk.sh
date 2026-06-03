@@ -17,11 +17,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r1_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r3_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="1"
+PKG_RELEASE="3"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -47,6 +47,9 @@ install -D -m 755 "$FILES_DIR/sing-box.init" "$TMPDIR/data/etc/init.d/sing-box"
 
 # vpn-bootstrap.sh (zram + RAM профиль)
 install -D -m 755 "$FILES_DIR/vpn-bootstrap.sh" "$TMPDIR/data/usr/bin/vpn-bootstrap.sh"
+
+# vpn-connect.sh — регистрация роутера по коду из Telegram
+install -D -m 755 "$FILES_DIR/vpn-connect.sh" "$TMPDIR/data/usr/bin/vpn-connect.sh"
 
 # LuCI
 install -D -m 644 "$FILES_DIR/vpn.lua"   "$TMPDIR/data/usr/lib/lua/luci/controller/vpn.lua"
@@ -188,6 +191,11 @@ ENDSETUP
 sed -i "s|__CDN__|${CDN}|g" "\$SETUP"
 chmod +x "\$SETUP"
 (sh "\$SETUP" >> /dev/null 2>&1) &
+
+# Очищаем LuCI кеш синхронно — вкладка появится сразу без перезагрузки
+rm -rf /tmp/luci-indexcache /tmp/luci-modulecache /tmp/luci-sessions* 2>/dev/null
+/etc/init.d/uhttpd restart 2>/dev/null || true
+
 exit 0
 POSTINST_EOF
 chmod 755 "$TMPDIR/ctrl/postinst"
