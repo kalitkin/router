@@ -19,7 +19,7 @@ const (
 	configPath     = "/etc/sing-box/config.json"
 	backupSuffix   = ".bak"
 	restartTimeout = 15 * time.Second
-	apiTimeout     = 3 * time.Second
+	apiTimeout     = 8 * time.Second
 	selectorTag    = "proxy" // outbound tag used in Marzban-generated sing-box config
 )
 
@@ -52,7 +52,7 @@ func (m *Manager) Apply(data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	patched, err := injectClashAPI(data)
+	patched, err := patchRouterConfig(data)
 	if err != nil {
 		return fmt.Errorf("patch config: %w", err)
 	}
@@ -261,12 +261,19 @@ func (m *Manager) restartLocked() error {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func injectClashAPI(data []byte) ([]byte, error) {
+// patchRouterConfig applies all router-specific patches to the sing-box config:
+// - Injects Clash API (external_controller)
+// - Sets TUN stack to gvisor (mixed/system stack requires TPROXY nftables rules
+//   that sing-box does not add under fw4/OpenWrt 24+; gvisor is full userspace TCP/IP)
+// - Sets route.default_mark=100 so all sing-box outbound sockets bypass the TUN
+//   routing table (prevents routing loop: VPN server IPs are in table 2022 via sing-tun)
+func patchRouterConfig(data []byte) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
+	// Clash API
 	exp, _ := cfg["experimental"].(map[string]any)
 	if exp == nil {
 		exp = map[string]any{}
@@ -278,6 +285,29 @@ func injectClashAPI(data []byte) ([]byte, error) {
 		}
 	}
 	cfg["experimental"] = exp
+
+	// TUN stack: gvisor
+	if inbounds, ok := cfg["inbounds"].([]any); ok {
+		for _, ib := range inbounds {
+			ibMap, ok := ib.(map[string]any)
+			if !ok {
+				continue
+			}
+			if ibMap["type"] == "tun" {
+				if _, exists := ibMap["stack"]; !exists {
+					ibMap["stack"] = "gvisor"
+				}
+			}
+		}
+	}
+
+	// route.default_mark: 100
+	route, _ := cfg["route"].(map[string]any)
+	if route == nil {
+		route = map[string]any{}
+	}
+	route["default_mark"] = 100
+	cfg["route"] = route
 
 	return json.MarshalIndent(cfg, "", "  ")
 }
