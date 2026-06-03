@@ -78,7 +78,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Парсим ответ
-TOKEN="" ; SECRET="" ; DEVICE_ID="" ; CONFIG=""
+TOKEN="" ; SECRET="" ; DEVICE_ID=""
 if command -v jsonfilter > /dev/null 2>&1; then
     TOKEN=$(echo "$RESP" | jsonfilter -e '@.token' 2>/dev/null)
     SECRET=$(echo "$RESP" | jsonfilter -e '@.device_secret' 2>/dev/null)
