@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,7 +75,9 @@ func (a *Agent) applySubLink(subLink string) error {
 		return fmt.Errorf("fetch: %w", err)
 	}
 
-	hash := sha256hex(data)
+	// Use semantic hash: ignore REALITY server_name rotation (Marzban anti-DPI).
+	// sing-box restarts only when server/port/keys actually change.
+	hash := semanticHash(data)
 
 	a.mu.Lock()
 	unchanged := hash == a.appliedHash
@@ -86,6 +89,9 @@ func (a *Agent) applySubLink(subLink string) error {
 
 	a.log.Printf("reconcile: new config hash=%s…", hash[:12])
 
+	// Remember which server the user selected before we touch anything.
+	prevServer, _ := a.sb.CurrentServer()
+
 	// Backup the current working config before we touch anything.
 	if err := a.sb.Backup(); err != nil {
 		a.log.Printf("reconcile: backup warning: %v", err)
@@ -94,6 +100,13 @@ func (a *Agent) applySubLink(subLink string) error {
 	if err := a.sb.Apply(data); err != nil {
 		a.log.Printf("reconcile: apply error: %v — rolling back", err)
 		return a.doRollback()
+	}
+
+	// Restore the user-selected server — Apply() resets selector to default.
+	if prevServer != "" {
+		if err := a.sb.SwitchServer(prevServer); err != nil {
+			a.log.Printf("reconcile: restore selector %q: %v", prevServer, err)
+		}
 	}
 
 	// Persist state.
@@ -178,6 +191,38 @@ func (a *Agent) readAppliedHash() string {
 func sha256hex(data []byte) string {
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
+}
+
+// semanticHash hashes the config after stripping volatile TLS fields.
+// Marzban rotates tls.server_name on every subscription fetch for anti-DPI
+// diversity — across ALL outbound types, not just Reality. We want sing-box
+// to reload only when server/port/uuid actually change.
+// Falls back to sha256hex on parse error.
+func semanticHash(data []byte) string {
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return sha256hex(data)
+	}
+	if outbounds, ok := cfg["outbounds"].([]any); ok {
+		for _, ob := range outbounds {
+			obMap, ok := ob.(map[string]any)
+			if !ok {
+				continue
+			}
+			tls, ok := obMap["tls"].(map[string]any)
+			if !ok {
+				continue
+			}
+			// Strip server_name unconditionally — Marzban rotates it on all
+			// outbound types (Reality and plain TLS alike) for anti-DPI.
+			delete(tls, "server_name")
+		}
+	}
+	normalized, err := json.Marshal(cfg)
+	if err != nil {
+		return sha256hex(data)
+	}
+	return sha256hex(normalized)
 }
 
 func writeFile(path, content string) error {

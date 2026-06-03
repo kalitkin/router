@@ -2,14 +2,14 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
-# Изменения v1.3.0:
-#   - vpnd + sing-box (скачиваются с CDN при postinst, без tar)
-#   - zram настраивается синхронно в самом начале postinst
-#   - PassWall/xray удалены (заменены sing-box)
-#   - vpnd.init: старт без token-файла
+# Изменения v1.3.0-r8:
+#   - Возврат к Lua UI (vpn.lua + index.htm) — красивый интерфейс с OTA, логами
+#   - Depends: добавлены luci-lua-runtime + curl
+#   - vpn.lua адаптирован под vpnd/sing-box (убраны PassWall/xray)
+#   - curl вместо uclient-fetch в vpn-connect.sh
 #
 # Использование:
-#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r1_all.ipk
+#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r8_all.ipk
 #   ./patch-ipk.sh output.ipk   # указать имя результата
 ###############################################################################
 
@@ -17,11 +17,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r3_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r8_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="3"
+PKG_RELEASE="8"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -39,26 +39,22 @@ mkdir -p "$TMPDIR/data" "$TMPDIR/ctrl"
 
 echo "[1/4] Сборка data.tar.gz..."
 
-# vpnd init
-install -D -m 755 "$FILES_DIR/vpnd.init"     "$TMPDIR/data/etc/init.d/vpnd"
+# Init-скрипты
+install -D -m 755 "$FILES_DIR/vpnd.init"        "$TMPDIR/data/etc/init.d/vpnd"
+install -D -m 755 "$FILES_DIR/sing-box.init"    "$TMPDIR/data/etc/init.d/sing-box"
 
-# sing-box init
-install -D -m 755 "$FILES_DIR/sing-box.init" "$TMPDIR/data/etc/init.d/sing-box"
-
-# vpn-bootstrap.sh (zram + RAM профиль)
+# Вспомогательные скрипты
 install -D -m 755 "$FILES_DIR/vpn-bootstrap.sh" "$TMPDIR/data/usr/bin/vpn-bootstrap.sh"
+install -D -m 755 "$FILES_DIR/vpn-connect.sh"   "$TMPDIR/data/usr/bin/vpn-connect.sh"
 
-# vpn-connect.sh — регистрация роутера по коду из Telegram
-install -D -m 755 "$FILES_DIR/vpn-connect.sh" "$TMPDIR/data/usr/bin/vpn-connect.sh"
-
-# LuCI
+# LuCI — Lua контроллер + HTML шаблон (требует luci-lua-runtime)
 install -D -m 644 "$FILES_DIR/vpn.lua"   "$TMPDIR/data/usr/lib/lua/luci/controller/vpn.lua"
 install -D -m 644 "$FILES_DIR/index.htm" "$TMPDIR/data/usr/lib/lua/luci/view/vpn/index.htm"
 
-# Каталоги конфигов (пустые, с placeholder)
+# Каталоги конфигов
 mkdir -p "$TMPDIR/data/etc/vpn" "$TMPDIR/data/etc/sing-box"
-printf '# vpnd config — заполняется vpnd автоматически\n' > "$TMPDIR/data/etc/vpn/.keep"
-printf '# sing-box config — заполняется vpnd автоматически\n' > "$TMPDIR/data/etc/sing-box/.keep"
+printf '# vpnd config\n' > "$TMPDIR/data/etc/vpn/.keep"
+printf '# sing-box config\n' > "$TMPDIR/data/etc/sing-box/.keep"
 
 # Версия
 mkdir -p "$TMPDIR/data/etc/vpn-agent"
@@ -82,7 +78,7 @@ INSTALLED_SIZE=$(du -sk "$TMPDIR/data" | cut -f1)
 cat > "$TMPDIR/ctrl/control" << CTRL
 Package: $PKG_NAME
 Version: ${PKG_VERSION}-r${PKG_RELEASE}
-Depends: libc, luci-base, jsonfilter
+Depends: libc, luci-base, luci-lua-runtime, jsonfilter, curl, ca-bundle, kmod-tun
 License: MIT
 Section: luci
 Architecture: all
@@ -125,7 +121,7 @@ progress "setup" 2 "Старт..."
 sync
 echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-# ── 1. zram (синхронно, первым делом) ─────────────────────────────────
+# ── 1. zram ──────────────────────────────────────────────────────────
 if [ -x /usr/bin/vpn-bootstrap.sh ]; then
     log "zram: running bootstrap"
     progress "setup" 5 "Настройка zram..."
@@ -134,45 +130,45 @@ if [ -x /usr/bin/vpn-bootstrap.sh ]; then
     log "zram: done"
 fi
 
-# ── 2. Определяем архитектуру ─────────────────────────────────────────
+# ── 2. Архитектура ────────────────────────────────────────────────────
 OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {print \$2}' | grep -v 'all\|noarch' | tail -1)
 log "arch=\$OWRT_ARCH"
 
-# ── 3. Скачиваем vpnd ─────────────────────────────────────────────────
-if [ ! -x /usr/bin/vpnd ] || /usr/bin/vpnd --version 2>&1 | grep -q "not found"; then
+# ── 3. vpnd ───────────────────────────────────────────────────────────
+if [ ! -x /usr/bin/vpnd ]; then
     log "vpnd: downloading..."
     progress "setup" 20 "Скачиваем vpnd..."
     URL="\$CDN/\$OWRT_ARCH/vpnd"
     if wget -q -O /usr/bin/vpnd "\$URL" 2>>\$LOG && [ -s /usr/bin/vpnd ]; then
         chmod +x /usr/bin/vpnd
-        log "vpnd: installed ok"
+        log "vpnd: ok"
     else
         rm -f /usr/bin/vpnd
-        log "vpnd: FAILED to download from \$URL"
+        log "vpnd: FAILED \$URL"
     fi
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 else
     log "vpnd: already installed"
 fi
 
-# ── 4. Скачиваем sing-box ─────────────────────────────────────────────
+# ── 4. sing-box ───────────────────────────────────────────────────────
 if [ ! -x /usr/bin/sing-box ]; then
     log "sing-box: downloading..."
     progress "setup" 50 "Скачиваем sing-box (~20MB)..."
     URL="\$CDN/\$OWRT_ARCH/sing-box"
     if wget -q -O /usr/bin/sing-box "\$URL" 2>>\$LOG && [ -s /usr/bin/sing-box ]; then
         chmod +x /usr/bin/sing-box
-        log "sing-box: installed ok (\$(sing-box version 2>/dev/null | head -1))"
+        log "sing-box: ok"
     else
         rm -f /usr/bin/sing-box
-        log "sing-box: FAILED to download from \$URL"
+        log "sing-box: FAILED \$URL"
     fi
     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 else
     log "sing-box: already installed"
 fi
 
-# ── 5. Включаем сервисы ───────────────────────────────────────────────
+# ── 5. Сервисы ────────────────────────────────────────────────────────
 progress "setup" 90 "Включаем сервисы..."
 mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 
@@ -180,8 +176,8 @@ mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 /etc/init.d/vpnd enable 2>/dev/null || true
 /etc/init.d/vpnd start 2>/dev/null || true
 
-# Очищаем LuCI кеш
-rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null
+rm -f /tmp/luci-indexcache* 2>/dev/null
+rm -rf /tmp/luci-modulecache 2>/dev/null
 
 progress "ready" 100 ""
 log "=== vpnd-setup done ==="
@@ -192,8 +188,9 @@ sed -i "s|__CDN__|${CDN}|g" "\$SETUP"
 chmod +x "\$SETUP"
 (sh "\$SETUP" >> /dev/null 2>&1) &
 
-# Очищаем LuCI кеш синхронно — вкладка появится сразу без перезагрузки
-rm -rf /tmp/luci-indexcache /tmp/luci-modulecache /tmp/luci-sessions* 2>/dev/null
+# Синхронно: очищаем кеш и перезапускаем uhttpd
+rm -f /tmp/luci-indexcache* 2>/dev/null
+rm -rf /tmp/luci-modulecache /tmp/luci-sessions* 2>/dev/null
 /etc/init.d/uhttpd restart 2>/dev/null || true
 
 exit 0
@@ -235,16 +232,12 @@ echo "════════════════════════�
 echo "  Готово! ${PKG_VERSION}-r${PKG_RELEASE}"
 echo "  Файл: $(basename $OUTPUT) ($SIZE)"
 echo ""
-echo "  1. Залить бинари на сервер:"
-echo "     scp files/vpnd-armv7 root@self-music.online:/var/www/self-music.online/packages/latest/arm_cortex-a7_neon-vfpv4/vpnd"
-echo "     scp files/sing-box-armv7 root@self-music.online:/var/www/self-music.online/packages/latest/arm_cortex-a7_neon-vfpv4/sing-box"
-echo ""
-echo "  2. Залить IPK на сервер:"
+echo "  Залить на сервер:"
 echo "     scp $(basename $OUTPUT) root@self-music.online:/var/www/self-music.online/router.ipk"
 echo ""
-echo "  3. Установка на роутере:"
+echo "  Установка на роутере:"
 echo "     opkg install https://self-music.online/router.ipk"
 echo ""
-echo "  Прогресс установки:"
+echo "  Прогресс:"
 echo "     tail -f /tmp/vpnd-install.log"
 echo "════════════════════════════════════"

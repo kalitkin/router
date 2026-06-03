@@ -17,9 +17,13 @@ import (
 const (
 	reconcileInterval = 5 * time.Minute
 	healEvery         = 4
-	maxRollbacks      = 3
-	rollbackWindow    = 10 * time.Minute
-	safeModeWait      = 1 * time.Hour
+	// L2 health check: restart sing-box only after this many consecutive
+	// Clash API failures. A single slow response under swap pressure is not
+	// a reason to kill the process (rule_sets would have to reload into RAM).
+	l2RestartThreshold = 3
+	maxRollbacks       = 3
+	rollbackWindow     = 10 * time.Minute
+	safeModeWait       = 1 * time.Hour
 )
 
 type Config struct {
@@ -44,6 +48,9 @@ type Agent struct {
 	rollbackSince time.Time
 	safeMode      bool
 	safeModeUntil time.Time
+
+	// health state
+	l2FailCount int // consecutive Clash API failures
 
 	// command state
 	lastCmdID     string         // dedup: skip already-executed commands

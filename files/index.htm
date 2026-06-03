@@ -450,7 +450,7 @@
   var STAGE_LABELS = {
     setup:      'Подготовка системы...',
     connecting: 'Подключение к серверу...',
-    installing: 'Установка PassWall...',
+    installing: 'Установка sing-box...',
     applying:   'Применение конфига...',
     done:       'Готово!',
     error:      'Ошибка',
@@ -563,14 +563,14 @@
   }
 
   function updateStatus(d) {
-    if (d.vpn_up) {
+    if (d.vpn_up || d.singbox_running) {
       var sub = d.wan_ip ? 'IP: ' + d.wan_ip : '';
       if (d.vpn_since) sub += (sub ? ' · ' : '') + 'работает ' + fmtUptime(d.vpn_since);
       if (!sub) sub = 'Device: ' + (d.device_id || '—').substring(0, 8) + '…';
       setStatus('is-up', 'VPN работает', sub);
     } else if (d.connected) {
-      setStatus('is-wait', 'Конфиг получен, VPN не запущен',
-        'Проверьте PassWall в меню Services.');
+      var sub2 = 'vpnd: ' + (d.vpnd_running ? '✓' : '✗') + '  sing-box: ' + (d.singbox_running ? '✓' : '✗');
+      setStatus('is-wait', 'Конфиг получен, sing-box не запущен', sub2);
     } else if (d.registered) {
       setStatus('is-wait', 'Зарегистрирован — ожидание конфига…',
         'Обычно занимает 5–30 секунд.');

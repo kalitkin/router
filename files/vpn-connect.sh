@@ -106,28 +106,12 @@ chmod 600 "$DIR/token" "$DIR/secret" 2>/dev/null || true
 
 
 log "OK: registered device_id=$DEVICE_ID"
-progress "connecting" 60 "Регистрация успешна..."
+progress "connecting" 80 "Запускаем vpnd..."
 
-# Если конфиг пришёл сразу — сохраняем и применяем
-if [ -n "$CONFIG" ] && [ "$CONFIG" != "null" ] && [ "$CONFIG" != "" ]; then
-    echo "$CONFIG" > "$DIR/config.tmp" && mv "$DIR/config.tmp" "$DIR/config"
-    chmod 600 "$DIR/config" 2>/dev/null || true
-    log "OK: config received immediately, applying..."
-    progress "connecting" 70 "Применяем конфиг..."
-    SHOW_VPN_PROGRESS=1 /usr/bin/vpn-apply.sh 2>>"$LOG" &
-else
-    progress "ready" 100 ""
-    log "OK: no config yet, agent will poll for it"
-fi
+# Рестартуем vpnd — он сам скачает конфиг sing-box и запустит его
+/etc/init.d/vpnd restart 2>/dev/null || /etc/init.d/vpnd start 2>/dev/null || true
+log "OK: vpnd restarted"
 
-# Запускаем/рестартим агент
-if [ -f /etc/init.d/vpn-agent ]; then
-    /etc/init.d/vpn-agent enable 2>/dev/null
-    /etc/init.d/vpn-agent restart 2>/dev/null
-    log "OK: agent started"
-else
-    log "WARNING: /etc/init.d/vpn-agent not found"
-fi
-
+progress "ready" 100 ""
 echo "OK"
 exit 0

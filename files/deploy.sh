@@ -22,63 +22,53 @@ echo ""
 
 # ═══ 1. Директории ═══
 
-echo "[1/5] Директории..."
-mkdir -p "$WEB/router" "$WEB/packages" /root/vpn-scripts
+echo "[1/4] Директории..."
+mkdir -p "$WEB/router" "$WEB/packages"
 echo "  OK"
 
 # ═══ 2. Файлы ═══
 
-echo "[2/5] Копирование файлов..."
+echo "[2/4] Копирование файлов..."
 
-cp "$SCRIPT_DIR/install.sh" "$WEB/install.sh"
-chmod 644 "$WEB/install.sh"
-
-for F in vpn-connect.sh vpn-agent.sh vpn-apply.sh vpn-agent.init xray-fetch.init \
-         bypass_ips.txt bypass_domains.txt vpn.lua index.htm; do
-    cp "$SCRIPT_DIR/$F" "$WEB/router/$F"
+for F in vpn-connect.sh vpn-bootstrap.sh; do
+    install -m 755 "$SCRIPT_DIR/$F" "$WEB/router/$F"
 done
 
-chmod +x "$WEB/router/"*.sh "$WEB/router/"*.init 2>/dev/null || true
-chmod 644 "$WEB/router/"*.txt "$WEB/router/"*.lua "$WEB/router/"*.htm 2>/dev/null || true
+for F in bypass_ips.txt bypass_domains.txt vpn.lua index.htm; do
+    install -m 644 "$SCRIPT_DIR/$F" "$WEB/router/$F"
+done
 
 for BPFILE in bypass_ips.txt bypass_domains.txt; do
     sha256sum "$WEB/router/$BPFILE" | cut -d' ' -f1 > "$WEB/router/${BPFILE}.sha256"
     chmod 644 "$WEB/router/${BPFILE}.sha256"
 done
 
-cp "$SCRIPT_DIR/build.sh" /root/vpn-scripts/build.sh
-chmod +x /root/vpn-scripts/build.sh
-
 echo "  OK"
 
 # ═══ 3. IPK ═══
 
-echo "[3/5] IPK..."
+echo "[3/4] IPK..."
 
 IPK_SRC=""
-# В CI (SKIP_XRAY_BUILD=1) всегда берём свежесобранный /tmp/router.ipk
-if [ "${SKIP_XRAY_BUILD:-0}" = "1" ] && [ -f /tmp/router.ipk ]; then
+if [ "${SKIP_IPK_BUILD:-0}" = "1" ] && [ -f /tmp/router.ipk ]; then
     IPK_SRC=/tmp/router.ipk
 else
-    for P in "$SCRIPT_DIR/../luci-app-vpnbot_"*r2*.ipk \
-             "$SCRIPT_DIR/../luci-app-vpnbot_"*.ipk \
-             /tmp/router.ipk; do
+    for P in "$SCRIPT_DIR/../luci-app-vpnbot_"*.ipk /tmp/router.ipk; do
         [ -f "$P" ] && { IPK_SRC="$P"; break; }
     done
 fi
 
 if [ -n "$IPK_SRC" ]; then
-    cp "$IPK_SRC" "$WEB/router.ipk"
-    chmod 644 "$WEB/router.ipk"
-    echo "  Скопирован: $(basename "$IPK_SRC")"
+    install -m 644 "$IPK_SRC" "$WEB/router.ipk"
+    echo "  Скопирован: $(basename "$IPK_SRC") ($(du -sh "$WEB/router.ipk" | cut -f1))"
 else
     echo "  WARNING: IPK не найден — загрузите вручную:"
-    echo "    scp luci-app-vpnbot_*r2*.ipk root@self-music.online:$WEB/router.ipk"
+    echo "    scp luci-app-vpnbot_*.ipk root@self-music.online:$WEB/router.ipk"
 fi
 
 # ═══ 4. Nginx ═══
 
-echo "[4/5] Nginx..."
+echo "[4/4] Nginx..."
 
 NGINX_CONF=""
 for F in /etc/nginx/sites-enabled/self-music.online \
@@ -98,9 +88,8 @@ if [ -n "$NGINX_CONF" ] && [ -f "$NGINX_CONF" ]; then
         echo "  Добавлен: $1"
     }
 
-    try_add 'location /router/'    'location /router/ { alias /var/www/self-music.online/router/; }'
-    try_add 'location /packages/'  'location /packages/ { alias /var/www/self-music.online/packages/; autoindex on; }'
-    try_add 'location = /install'  'location = /install.sh { alias /var/www/self-music.online/install.sh; default_type text/plain; }'
+    try_add 'location /router/'      'location /router/ { alias /var/www/self-music.online/router/; }'
+    try_add 'location /packages/'    'location /packages/ { alias /var/www/self-music.online/packages/; autoindex on; }'
     try_add 'location = /router.ipk' 'location = /router.ipk { alias /var/www/self-music.online/router.ipk; }'
 
     if [ $RELOAD -eq 1 ]; then
@@ -114,34 +103,10 @@ else
 
     location /router/        { alias /var/www/self-music.online/router/; }
     location /packages/      { alias /var/www/self-music.online/packages/; autoindex on; }
-    location = /install.sh   { alias /var/www/self-music.online/install.sh; default_type text/plain; }
     location = /router.ipk   { alias /var/www/self-music.online/router.ipk; }
 
 HINT
 fi
-
-# ═══ 5. Xray бинарники ═══
-
-echo "[5/5] Xray репозиторий..."
-
-if [ "${SKIP_XRAY_BUILD:-0}" = "1" ]; then
-    echo "  Пропущено (CI)"
-else
-
-if ! command -v jq > /dev/null 2>&1 || ! command -v unzip > /dev/null 2>&1; then
-    echo "  Устанавливаем jq/unzip..."
-    apt-get install -y jq unzip > /dev/null 2>&1 || \
-        yum install -y jq unzip > /dev/null 2>&1 || true
-fi
-
-if command -v jq > /dev/null 2>&1; then
-    /root/vpn-scripts/build.sh v1.0.0 --all --force
-else
-    echo "  WARNING: jq не установлен, запустите вручную:"
-    echo "    /root/vpn-scripts/build.sh v1.0.0"
-fi
-
-fi # SKIP_XRAY_BUILD
 
 # ═══ Итого ═══
 
@@ -151,12 +116,8 @@ echo "  Готово!"
 echo ""
 echo "  Проверка:"
 echo "    curl -sI https://self-music.online/router.ipk"
-echo "    curl -sI https://self-music.online/install.sh"
-echo "    curl -sI https://self-music.online/router/vpn-connect.sh"
+echo "    curl -sI https://self-music.online/packages/latest/armv7/vpnd"
 echo ""
 echo "  Установка на роутере:"
 echo "    opkg install https://self-music.online/router.ipk"
-echo ""
-echo "  Или через curl:"
-echo "    curl -sL https://self-music.online/install.sh | sh -s -- КОД"
 echo "════════════════════════════════════════"

@@ -67,15 +67,15 @@ function action_connect()
 end
 
 function action_direct()
-    sys.exec("[ -f /etc/init.d/passwall ]  && /etc/init.d/passwall  stop 2>/dev/null; " ..
-             "[ -f /etc/init.d/passwall2 ] && /etc/init.d/passwall2 stop 2>/dev/null; " ..
-             "killall xray 2>/dev/null; rm -f /etc/vpn/vpn_started")
+    sys.exec("/etc/init.d/sing-box stop 2>/dev/null; " ..
+             "/etc/init.d/vpnd stop 2>/dev/null; " ..
+             "rm -f /etc/vpn/vpn_started")
     http.prepare_content("application/json")
     http.write('{"ok":true}')
 end
 
 function action_logs()
-    local log_file = "/etc/vpn/vpn-agent.log"
+    local log_file = "/tmp/vpnd-install.log"
     local fallback = "/tmp/vpn.log"
     local path = log_file
     if not fs.access(log_file) then path = fallback end
@@ -108,8 +108,7 @@ printf '{"stage":"setup","pct":15,"msg":"Скачиваем обновление
 if opkg install --force-reinstall 'https://self-music.online/router.ipk' >> /tmp/vpn-update.log 2>&1; then
     printf '{"stage":"done","pct":100,"msg":"Обновление установлено!"}' > "$PROG"
     sleep 1
-    /etc/init.d/vpn-agent restart >> /tmp/vpn-update.log 2>&1 || \
-    /etc/init.d/vpn-agent start   >> /tmp/vpn-update.log 2>&1 || true
+    /etc/init.d/vpnd restart >> /tmp/vpn-update.log 2>&1 || true
 else
     printf '{"stage":"error","pct":0,"msg":"Ошибка обновления. Лог: /tmp/vpn-update.log"}' > "$PROG"
 fi
@@ -137,15 +136,17 @@ rm -f /tmp/.vpn-update.sh
     http.write('{"ok":true}')
 end
 
--- action_status: derives vpn state from vpn_started file (no shell exec)
 function action_status()
-    local registered = fs.readfile("/etc/vpn/token") ~= nil
-    local config_data = fs.readfile("/etc/vpn/config")
+    local registered = fs.access("/etc/vpn/token") ~= nil
+    local config_data = fs.readfile("/etc/sing-box/config.json")
     local connected = config_data ~= nil and config_data ~= ""
 
     local device_id = ""
     local did = fs.readfile("/etc/vpn/device_id")
     if did then device_id = did:gsub("[%s]+", "") end
+
+    local vpnd_running    = sys.exec("pgrep -x vpnd >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
+    local singbox_running = sys.exec("pgrep -x sing-box >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
 
     local vpn_since = 0
     local since_f = fs.readfile("/etc/vpn/vpn_started")
@@ -154,15 +155,17 @@ function action_status()
         if n then vpn_since = n end
     end
 
-    local vpn_up = vpn_since > 0
+    local vpn_up = singbox_running and connected
 
     http.prepare_content("application/json")
     http.write(
-        '{"registered":'  .. (registered and "true" or "false") ..
-        ',"connected":'   .. (connected  and "true" or "false") ..
-        ',"vpn_up":'      .. (vpn_up     and "true" or "false") ..
-        ',"device_id":"'  .. device_id .. '"' ..
-        ',"wan_ip":""'    ..
-        ',"vpn_since":'   .. tostring(vpn_since) .. '}'
+        '{"registered":'      .. (registered      and "true" or "false") ..
+        ',"connected":'       .. (connected        and "true" or "false") ..
+        ',"vpn_up":'          .. (vpn_up           and "true" or "false") ..
+        ',"vpnd_running":'    .. (vpnd_running      and "true" or "false") ..
+        ',"singbox_running":' .. (singbox_running   and "true" or "false") ..
+        ',"device_id":"'      .. device_id .. '"'  ..
+        ',"wan_ip":""'        ..
+        ',"vpn_since":'       .. tostring(vpn_since) .. '}'
     )
 end
