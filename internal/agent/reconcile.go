@@ -136,8 +136,16 @@ func (a *Agent) applyFromDisk() {
 
 	if a.sb.IsRunning() {
 		a.log.Println("startup: sing-box already running")
-		if err := a.sb.SetupRouting(); err != nil {
-			a.log.Printf("startup: routing: %v", err)
+		// ReapplyPatch restarts sing-box if patches changed (vpnd upgrade);
+		// SetupRouting is called inside restartLocked in that case.
+		restarted, err := a.sb.ReapplyPatch()
+		if err != nil {
+			a.log.Printf("startup: re-patch: %v", err)
+		}
+		if !restarted {
+			if err := a.sb.SetupRouting(); err != nil {
+				a.log.Printf("startup: routing: %v", err)
+			}
 		}
 		return
 	}

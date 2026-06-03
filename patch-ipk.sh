@@ -17,11 +17,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r8_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r9_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="8"
+PKG_RELEASE="9"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -135,23 +135,27 @@ OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {
 log "arch=\$OWRT_ARCH"
 
 # ── 3. vpnd ───────────────────────────────────────────────────────────
-if [ ! -x /usr/bin/vpnd ]; then
-    log "vpnd: downloading..."
-    progress "setup" 20 "Скачиваем vpnd..."
-    URL="\$CDN/\$OWRT_ARCH/vpnd"
-    if wget -q -O /usr/bin/vpnd "\$URL" 2>>\$LOG && [ -s /usr/bin/vpnd ]; then
-        chmod +x /usr/bin/vpnd
-        log "vpnd: ok"
+# Always re-download vpnd so upgrades via --force-reinstall pick up the
+# latest binary. Download to .new, replace atomically only on success.
+log "vpnd: downloading..."
+progress "setup" 20 "Скачиваем vpnd..."
+URL="\$CDN/\$OWRT_ARCH/vpnd"
+if wget -q -O /usr/bin/vpnd.new "\$URL" 2>>\$LOG && [ -s /usr/bin/vpnd.new ]; then
+    mv /usr/bin/vpnd.new /usr/bin/vpnd
+    chmod +x /usr/bin/vpnd
+    log "vpnd: ok"
+else
+    rm -f /usr/bin/vpnd.new
+    if [ -x /usr/bin/vpnd ]; then
+        log "vpnd: download failed, keeping existing"
     else
-        rm -f /usr/bin/vpnd
         log "vpnd: FAILED \$URL"
     fi
-    sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-else
-    log "vpnd: already installed"
 fi
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
 # ── 4. sing-box ───────────────────────────────────────────────────────
+# sing-box is ~20MB — only download if missing.
 if [ ! -x /usr/bin/sing-box ]; then
     log "sing-box: downloading..."
     progress "setup" 50 "Скачиваем sing-box (~20MB)..."

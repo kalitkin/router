@@ -266,6 +266,38 @@ func (m *Manager) restartLocked() error {
 	return fmt.Errorf("sing-box did not start within %s", restartTimeout)
 }
 
+// ReapplyPatch re-applies patchRouterConfig to the on-disk config.json.
+// If patches changed (e.g. after a vpnd upgrade), it restarts sing-box.
+// Returns true if a restart was performed (SetupRouting already called inside).
+func (m *Manager) ReapplyPatch() (bool, error) {
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read config: %w", err)
+	}
+
+	patched, err := patchRouterConfig(data)
+	if err != nil {
+		return false, fmt.Errorf("patch: %w", err)
+	}
+
+	if bytes.Equal(data, patched) {
+		return false, nil
+	}
+
+	m.log.Println("reapply: config changed after re-patch (vpnd upgrade?), restarting")
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := writeAtomic(m.configPath, patched); err != nil {
+		return false, fmt.Errorf("write: %w", err)
+	}
+	return true, m.restartLocked()
+}
+
 // ── routing ───────────────────────────────────────────────────────────────────
 
 // SetupRouting configures kernel ip rules and table 2022 for VPN forwarding.
