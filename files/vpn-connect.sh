@@ -83,12 +83,10 @@ if command -v jsonfilter > /dev/null 2>&1; then
     TOKEN=$(echo "$RESP" | jsonfilter -e '@.token' 2>/dev/null)
     SECRET=$(echo "$RESP" | jsonfilter -e '@.device_secret' 2>/dev/null)
     DEVICE_ID=$(echo "$RESP" | jsonfilter -e '@.device_id' 2>/dev/null)
-    CONFIG=$(echo "$RESP" | jsonfilter -e '@.config' 2>/dev/null)
 else
     TOKEN=$(echo "$RESP" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
     SECRET=$(echo "$RESP" | grep -o '"device_secret":"[^"]*"' | cut -d'"' -f4)
     DEVICE_ID=$(echo "$RESP" | grep -o '"device_id":"[^"]*"' | cut -d'"' -f4)
-    CONFIG=$(echo "$RESP" | grep -o '"config":"[^"]*"' | cut -d'"' -f4)
 fi
 
 if [ -z "$TOKEN" ]; then
