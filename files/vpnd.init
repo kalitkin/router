@@ -9,6 +9,7 @@ PROG=/usr/bin/vpnd
 
 start_service() {
     [ -x "$PROG" ] || return 0
+    [ -f /etc/vpn/token ] || return 0
 
     procd_open_instance vpnd
     # GOMEMLIMIT=10MiB — caps Go heap so GC fires before OOM killer does.
