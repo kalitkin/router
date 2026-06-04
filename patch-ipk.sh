@@ -2,6 +2,14 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r22:
+#   - vpn.lua: pgrep -x sing-box → pgrep sing-box (BusyBox -x сравнивает полный cmdline,
+#     не имя процесса → singbox_running=false → UI навсегда "VPN запускается…")
+#   - patch-ipk.sh: zram init script /etc/init.d/zram (не zram-swap)
+#   - vpn-bootstrap.sh: nf_conntrack TCP timeout tuning (established 600s вместо 120h)
+#     Без этого conntrack накапливает 12000+ записей с TPROXY (2 записи на TCP соединение)
+#   - Bump r22
+#
 # Изменения v1.3.0-r21:
 #   - vpn-bootstrap.sh: убран opkg install zram-swap — он запускался до opkg lock wait
 #     → bootstrap висел → setup никогда не писал "ready" → прогресс-бар навсегда
@@ -79,15 +87,15 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r21_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r22_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="21"
+PKG_RELEASE="22"
 
 CDN="https://self-music.online/packages/latest"
 
-echo "=== IPK Builder v${PKG_VERSION}-r${PKG_RELEASE} (r21: zram fix + L3 server fallback) ==="
+echo "=== IPK Builder v${PKG_VERSION}-r${PKG_RELEASE} ==="
 echo "Файлы: $FILES_DIR"
 echo "Выход: $OUTPUT"
 echo ""
@@ -260,15 +268,16 @@ if [ -f /etc/vpn/zram_size ]; then
         sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         log "zram: installed"
     fi
-    if [ -f /etc/init.d/zram-swap ]; then
-        /etc/init.d/zram-swap stop 2>/dev/null || true
+    # OpenWrt zram-swap package installs /etc/init.d/zram (not zram-swap)
+    if [ -f /etc/init.d/zram ]; then
+        /etc/init.d/zram stop 2>/dev/null || true
         uci set zram-swap.@zram-swap[0].size="\$ZRAM_MB" 2>/dev/null && \
             uci commit zram-swap 2>/dev/null || true
-        /etc/init.d/zram-swap start 2>/dev/null || true
-        /etc/init.d/zram-swap enable 2>/dev/null || true
+        /etc/init.d/zram start 2>/dev/null || true
+        /etc/init.d/zram enable 2>/dev/null || true
         log "zram: configured \${ZRAM_MB}MB and started"
     else
-        log "zram: init script not found after install, skipping"
+        log "zram: init script not found after install (zram still active via opkg postinst)"
     fi
 fi
 

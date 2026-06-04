@@ -53,6 +53,19 @@ else
     log "zram: skipping (MEM=${MEM_KB}kB > 128MB)"
 fi
 
-# ── 3. Sentinel ───────────────────────────────────────────────────────────
+# ── 3. nf_conntrack tuning ───────────────────────────────────────────────
+# With TPROXY each TCP connection = 2 conntrack entries.
+# Default established timeout (~120h) causes entries to accumulate (12000+).
+# Lower to 10 minutes; TIME_WAIT and others get tighter limits too.
+CT=/proc/sys/net/netfilter
+if [ -f "$CT/nf_conntrack_tcp_timeout_established" ]; then
+    echo 600   > "$CT/nf_conntrack_tcp_timeout_established"
+    echo 60    > "$CT/nf_conntrack_tcp_timeout_time_wait"
+    echo 30    > "$CT/nf_conntrack_tcp_timeout_close_wait"
+    echo 10    > "$CT/nf_conntrack_tcp_timeout_fin_wait"
+    log "conntrack: TCP timeouts tuned (established=600s)"
+fi
+
+# ── 4. Sentinel ───────────────────────────────────────────────────────────
 touch "$SENTINEL"
 log "bootstrap done (profile=$PROFILE)"

@@ -155,8 +155,10 @@ function action_status()
     local sv = fs.readfile("/etc/vpn/current_server")
     if sv then current_server = sv:gsub("[%s]+", "") end
 
-    local vpnd_running    = sys.exec("pgrep -x vpnd >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
-    local singbox_running = sys.exec("pgrep -x sing-box >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
+    -- BusyBox pgrep -x matches full cmdline, not comm name.
+    -- vpnd has no args so -x works; sing-box has args so use plain pgrep.
+    local vpnd_running    = sys.exec("pgrep -x vpnd    >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
+    local singbox_running = sys.exec("pgrep  sing-box  >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
 
     -- sing-box start time from /proc/<pid>/stat field 22 (starttime in clock ticks)
     local vpn_since = 0
