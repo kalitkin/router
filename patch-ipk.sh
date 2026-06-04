@@ -2,6 +2,12 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r18:
+#   - extractVPSIPs: фильтр IPv6 (fc00::/7 и подобные) → nftset ipv4_addr не принимает IPv6
+#   - postinst: ждём освобождения opkg lock перед kmod install
+#   - postinst: arch fallback через tr -d вместо cut -d'"' (BusyBox cut возвращает всю строку)
+#   - Bump r18
+#
 # Изменения v1.3.0-r17:
 #   - TPROXY миграция: TUN/gVisor → kernel TPROXY (kmod-nft-tproxy)
 #   - RSS sing-box: 18-21MB → ~4-6MB (gVisor userspace TCP/IP стек устранён)
@@ -47,11 +53,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r17_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r18_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="17"
+PKG_RELEASE="18"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -160,7 +166,21 @@ if [ -x /usr/bin/vpn-bootstrap.sh ]; then
     log "zram: done"
 fi
 
-# ── 2. kmod-nft-tproxy ───────────────────────────────────────────────
+# ── 2. Ждём освобождения opkg lock ───────────────────────────────────
+# postinst запускается в фоне пока opkg ещё держит lock.
+LOCK_WAIT=0
+while [ -f /var/lock/opkg.lock ] && [ "\$LOCK_WAIT" -lt 60 ]; do
+    sleep 2
+    LOCK_WAIT=\$((LOCK_WAIT + 2))
+done
+
+# ── 3. Архитектура ────────────────────────────────────────────────────
+OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {print \$2}' | grep -v 'all\|noarch' | tail -1)
+# Fallback: читаем из /etc/openwrt_release. tr -d удаляет и одинарные и двойные кавычки.
+[ -z "\$OWRT_ARCH" ] && OWRT_ARCH=\$(grep '^DISTRIB_ARCH=' /etc/openwrt_release 2>/dev/null | cut -d= -f2 | tr -d "'\"")
+log "arch=\$OWRT_ARCH"
+
+# ── 4. kmod-nft-tproxy ───────────────────────────────────────────────
 # Required for TPROXY transparent proxy (replaces TUN/gVisor).
 if ! find /lib/modules -name 'nft_tproxy*' 2>/dev/null | grep -q .; then
     log "kmod: installing kmod-nft-tproxy + kmod-nft-socket..."
@@ -170,13 +190,7 @@ if ! find /lib/modules -name 'nft_tproxy*' 2>/dev/null | grep -q .; then
     log "kmod: done"
 fi
 
-# ── 3. Архитектура ────────────────────────────────────────────────────
-OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {print \$2}' | grep -v 'all\|noarch' | tail -1)
-# Fallback: читаем DISTRIB_ARCH из /etc/openwrt_release
-[ -z "\$OWRT_ARCH" ] && OWRT_ARCH=\$(grep 'DISTRIB_ARCH' /etc/openwrt_release 2>/dev/null | cut -d'"' -f2)
-log "arch=\$OWRT_ARCH"
-
-# ── 4. vpnd ───────────────────────────────────────────────────────────
+# ── 5. vpnd ───────────────────────────────────────────────────────────
 # Always re-download vpnd so upgrades via --force-reinstall pick up the
 # latest binary. Download to .new, replace atomically only on success.
 log "vpnd: downloading..."
@@ -196,7 +210,7 @@ else
 fi
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-# ── 5. sing-box ───────────────────────────────────────────────────────
+# ── 6. sing-box ───────────────────────────────────────────────────────
 # sing-box is ~20MB — only download if missing.
 if [ ! -x /usr/bin/sing-box ]; then
     log "sing-box: downloading..."
@@ -214,7 +228,7 @@ else
     log "sing-box: already installed"
 fi
 
-# ── 6. Сервисы ────────────────────────────────────────────────────────
+# ── 7. Сервисы ────────────────────────────────────────────────────────
 progress "setup" 90 "Включаем сервисы..."
 mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 
@@ -225,7 +239,7 @@ mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 rm -f /tmp/luci-indexcache* 2>/dev/null
 rm -rf /tmp/luci-modulecache 2>/dev/null
 
-# ── 7. Firewall — ICMP bypass only (TPROXY handles forwarding) ───────
+# ── 8. Firewall — ICMP bypass only (TPROXY handles forwarding) ───────
 # With TPROXY mode, br-lan traffic is intercepted by inet vpnbot/mangle_pre.
 # No forward rule for sing-tun needed. Keep ICMP bypass so pings go direct.
 if command -v nft >/dev/null 2>&1; then

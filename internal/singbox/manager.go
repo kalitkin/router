@@ -586,8 +586,9 @@ func patchRouterConfig(data []byte) ([]byte, []string, error) {
 }
 
 // extractVPSIPs reads route_exclude_address from a TUN inbound config and
-// returns the non-private CIDRs. These are VPN server IPs that must bypass
-// TPROXY to prevent routing loops.
+// returns public IPv4 CIDRs. These are VPN server IPs that must bypass TPROXY
+// to prevent routing loops. IPv6 and private ranges are excluded because
+// vpnbot_vps is type ipv4_addr and nftables can't put IPv6 in an IPv4 set.
 func extractVPSIPs(tunInbound map[string]any) []string {
 	excludeRaw, ok := tunInbound["route_exclude_address"]
 	if !ok {
@@ -601,6 +602,10 @@ func extractVPSIPs(tunInbound map[string]any) []string {
 	for _, v := range excludeList {
 		s, ok := v.(string)
 		if !ok || s == "" {
+			continue
+		}
+		// Skip IPv6 — vpnbot_vps is type ipv4_addr, nftables rejects IPv6 CIDRs.
+		if strings.Contains(s, ":") {
 			continue
 		}
 		if !isPrivateCIDR(s) {
