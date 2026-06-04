@@ -2,6 +2,11 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r16:
+#   - vpnd: memWatchLoop горутина — проактивный рестарт sing-box при:
+#       MemAvailable < 12MB, RSS sing-box > 18MB, uptime > 24h
+#   - vpnd: noteRestart() хелпер, singboxStartedAt tracking
+#
 # Изменения v1.3.0-r15:
 #   - vpnd.init: GOMEMLIMIT=10MiB — Go GC для vpnd, аналогично sing-box.init
 #
@@ -33,11 +38,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r15_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r16_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="15"
+PKG_RELEASE="16"
 
 CDN="https://self-music.online/packages/latest"
 
