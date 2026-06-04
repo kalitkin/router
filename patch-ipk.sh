@@ -2,6 +2,15 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r21:
+#   - vpn-bootstrap.sh: убран opkg install zram-swap — он запускался до opkg lock wait
+#     → bootstrap висел → setup никогда не писал "ready" → прогресс-бар навсегда
+#   - zram-swap теперь ставится в setup step 4 (после opkg update, когда lock свободен)
+#   - vpnd: health L3 — проверяет доступность текущего VPN-сервера через Clash API delay test
+#     Если 2 проверки подряд провалились → ищет рабочий сервер и переключается автоматически
+#   - index.htm: скрывает result div (сообщение о подключении) когда VPN подтверждён
+#   - Bump r21
+#
 # Изменения v1.3.0-r20:
 #   - Убраны luci-lua-runtime, curl, ca-bundle из Depends (они в tmpfs после ребута)
 #   - postinst фоновый скрипт ставит их сам после opkg update (уже запускается для kmod)
@@ -70,15 +79,15 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r20_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r21_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="20"
+PKG_RELEASE="21"
 
 CDN="https://self-music.online/packages/latest"
 
-echo "=== IPK Builder v${PKG_VERSION}-r${PKG_RELEASE} ==="
+echo "=== IPK Builder v${PKG_VERSION}-r${PKG_RELEASE} (r21: zram fix + L3 server fallback) ==="
 echo "Файлы: $FILES_DIR"
 echo "Выход: $OUTPUT"
 echo ""
@@ -238,6 +247,29 @@ if ! command -v curl >/dev/null 2>&1; then
     progress "setup" 14 "Установка curl..."
     opkg install curl ca-bundle >> "\$LOG" 2>&1 || true
     log "curl: done"
+fi
+
+# zram-swap (bootstrap.sh writes /etc/vpn/zram_size hint; we install here
+# after opkg update so there is no race with the parent opkg lock)
+if [ -f /etc/vpn/zram_size ]; then
+    ZRAM_MB=\$(cat /etc/vpn/zram_size)
+    if ! opkg list-installed 2>/dev/null | grep -q '^zram-swap '; then
+        log "zram: installing zram-swap..."
+        progress "setup" 16 "Установка zram-swap..."
+        opkg install zram-swap >> "\$LOG" 2>&1 || true
+        sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+        log "zram: installed"
+    fi
+    if [ -f /etc/init.d/zram-swap ]; then
+        /etc/init.d/zram-swap stop 2>/dev/null || true
+        uci set zram-swap.@zram-swap[0].size="\$ZRAM_MB" 2>/dev/null && \
+            uci commit zram-swap 2>/dev/null || true
+        /etc/init.d/zram-swap start 2>/dev/null || true
+        /etc/init.d/zram-swap enable 2>/dev/null || true
+        log "zram: configured \${ZRAM_MB}MB and started"
+    else
+        log "zram: init script not found after install, skipping"
+    fi
 fi
 
 # ── 5. vpnd ───────────────────────────────────────────────────────────

@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 )
+
+const l3FailThreshold = 2
 
 func (a *Agent) healthLoop(ctx context.Context) {
 	ticker := time.NewTicker(pingInterval * healEvery)
@@ -45,8 +48,6 @@ func (a *Agent) checkHealth() {
 	}
 
 	// L2: Clash API alive?
-	// Require l2RestartThreshold consecutive failures before restarting —
-	// a single slow response under swap pressure is not a real failure.
 	if !a.sb.IsAPIAlive() {
 		a.mu.Lock()
 		a.l2FailCount++
@@ -63,9 +64,63 @@ func (a *Agent) checkHealth() {
 				a.noteRestart()
 			}
 		}
+		return
+	}
+
+	// L2 passed: API alive, reset counter.
+	a.mu.Lock()
+	a.l2FailCount = 0
+	a.mu.Unlock()
+
+	// L3: VPN server reachability via Clash API delay test.
+	// If the selected server is unreachable, auto-switch to a working one.
+	a.checkL3Health()
+}
+
+// checkL3Health tests whether the currently selected VPN server can reach the
+// internet. On two consecutive failures it searches for a working server and
+// switches automatically — providing fallback when the user picks a dead server.
+func (a *Agent) checkL3Health() {
+	current, err := a.sb.CurrentServer()
+	if err != nil || current == "" {
+		return
+	}
+
+	if _, err := a.sb.TestServerDelay(current); err != nil {
+		a.mu.Lock()
+		a.l3FailCount++
+		count := a.l3FailCount
+		a.mu.Unlock()
+		a.log.Printf("health L3: server %q unreachable (%d/%d): %v", current, count, l3FailThreshold, err)
+
+		if count < l3FailThreshold {
+			return
+		}
+
+		a.log.Printf("health L3: threshold reached, searching for working server...")
+		working, err := a.sb.FindWorkingServer()
+		if err != nil {
+			a.log.Printf("health L3: no working server: %v", err)
+			return
+		}
+
+		if working == current {
+			a.log.Printf("health L3: current server %q reachable again", current)
+		} else {
+			if err := a.sb.SwitchServer(working); err != nil {
+				a.log.Printf("health L3: switch to %q failed: %v", working, err)
+				return
+			}
+			_ = writeFile(filepath.Join(a.cfg.Dir, "current_server"), working)
+			a.log.Printf("health L3: switched to %q (was %q, unreachable)", working, current)
+		}
+
+		a.mu.Lock()
+		a.l3FailCount = 0
+		a.mu.Unlock()
 	} else {
 		a.mu.Lock()
-		a.l2FailCount = 0
+		a.l3FailCount = 0
 		a.mu.Unlock()
 	}
 }

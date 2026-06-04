@@ -51,6 +51,7 @@ type Agent struct {
 
 	// health state
 	l2FailCount int // consecutive Clash API failures
+	l3FailCount int // consecutive server reachability failures
 
 	// memwatch state
 	singboxStartedAt time.Time // updated after every sing-box restart
@@ -125,6 +126,7 @@ func (a *Agent) noteRestart() {
 	a.mu.Lock()
 	a.singboxStartedAt = now
 	a.l2FailCount = 0
+	a.l3FailCount = 0
 	a.mu.Unlock()
 }
 

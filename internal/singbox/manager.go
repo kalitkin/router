@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,19 +37,21 @@ const (
 // Manager controls the sing-box process lifecycle.
 // All public methods are safe for concurrent use.
 type Manager struct {
-	configPath string
-	clashURL   string
-	httpClient *http.Client
-	mu         sync.Mutex // serializes Apply/Restart/Rollback
-	log        *log.Logger
+	configPath  string
+	clashURL    string
+	httpClient  *http.Client
+	delayClient *http.Client // longer timeout for server delay/connectivity tests
+	mu          sync.Mutex  // serializes Apply/Restart/Rollback
+	log         *log.Logger
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		configPath: configPath,
-		clashURL:   clashAPIURL,
-		httpClient: &http.Client{Timeout: apiTimeout},
-		log:        log.New(os.Stderr, "[singbox] ", log.LstdFlags),
+		configPath:  configPath,
+		clashURL:    clashAPIURL,
+		httpClient:  &http.Client{Timeout: apiTimeout},
+		delayClient: &http.Client{Timeout: 15 * time.Second},
+		log:         log.New(os.Stderr, "[singbox] ", log.LstdFlags),
 	}
 }
 
@@ -168,6 +171,84 @@ func (m *Manager) ListServers() ([]string, error) {
 		return nil, err
 	}
 	return info.All, nil
+}
+
+// TestServerDelay measures round-trip delay to the test URL via the named proxy.
+// Calls Clash API /proxies/{name}/delay — blocks until the test finishes (≤10 s).
+// Returns (delayMs, nil) on success; (0, err) if the server is unreachable.
+func (m *Manager) TestServerDelay(serverName string) (int, error) {
+	const (
+		testURL      = "http://cp.cloudflare.com/generate_204"
+		testTimeout  = 10000 // ms — passed to Clash API
+	)
+
+	params := url.Values{}
+	params.Set("url", testURL)
+	params.Set("timeout", fmt.Sprintf("%d", testTimeout))
+	apiURL := fmt.Sprintf("%s/proxies/%s/delay?%s",
+		m.clashURL, url.PathEscape(serverName), params.Encode())
+
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := m.delayClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("delay test request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		var msg struct {
+			Message string `json:"message"`
+		}
+		json.Unmarshal(body, &msg) //nolint:errcheck
+		return 0, fmt.Errorf("server %q unreachable (HTTP %d): %s", serverName, resp.StatusCode, msg.Message)
+	}
+
+	var result struct {
+		Delay int `json:"delay"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, fmt.Errorf("decode delay response: %w", err)
+	}
+	return result.Delay, nil
+}
+
+// FindWorkingServer tests all available servers and returns the first reachable one.
+// The current server is tried last to prefer switching away from the failing one.
+// Returns ("", err) if no server responds within timeout.
+func (m *Manager) FindWorkingServer() (string, error) {
+	servers, err := m.ListServers()
+	if err != nil {
+		return "", fmt.Errorf("list servers: %w", err)
+	}
+	if len(servers) == 0 {
+		return "", fmt.Errorf("no servers in config")
+	}
+
+	current, _ := m.CurrentServer()
+
+	// Build test order: non-current first, then current as last resort.
+	order := make([]string, 0, len(servers))
+	for _, s := range servers {
+		if s != current {
+			order = append(order, s)
+		}
+	}
+	if current != "" {
+		order = append(order, current)
+	}
+
+	for _, s := range order {
+		if d, err := m.TestServerDelay(s); err == nil {
+			m.log.Printf("connectivity: server %q reachable (%d ms)", s, d)
+			return s, nil
+		}
+	}
+	return "", fmt.Errorf("no reachable server found among %d candidates", len(servers))
 }
 
 func (m *Manager) proxyInfo() (*clashProxyResp, error) {

@@ -570,6 +570,7 @@
       if (d.vpn_since)      parts.push('работает ' + fmtUptime(d.vpn_since));
       var sub = parts.join(' · ') || 'Device: ' + (d.device_id || '—').substring(0, 8) + '…';
       setStatus('is-up', 'VPN работает', sub);
+      result.style.display = 'none'; // clear any pending connect/error message
       if (_afterConnect) { _afterConnect = false; checkReady(); }
       if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = setInterval(fetchStatus, 15000); }
     } else if (d.registered) {
