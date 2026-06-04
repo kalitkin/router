@@ -247,6 +247,19 @@
 .vpn-btn-sm.danger:hover:not(:disabled) { color: var(--vpn-red); text-decoration-color: var(--vpn-red); }
 .vpn-btn-sm:disabled { opacity: .45; cursor: not-allowed; }
 
+/* ── Conntrack предупреждение ── */
+.vpn-ct-warn {
+  display: none;
+  padding: 7px 12px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius);
+  font-size: .76rem;
+  color: #92400e;
+  margin-bottom: 10px;
+}
+.vpn-ct-warn.visible { display: block; }
+
 /* ── Лог ── */
 .vpn-log {
   display: none;
@@ -291,6 +304,9 @@
       <span>&nbsp;</span>
     </div>
   </div>
+
+  <!-- Conntrack предупреждение -->
+  <div class="vpn-ct-warn" id="vpn-ct-warn"></div>
 
   <!-- Прогресс установки -->
   <div class="vpn-progress" id="vpn-progress">
@@ -340,14 +356,18 @@
     <b>Как получить код</b>
     <div class="vpn-step">
       <div class="vpn-step-num">1</div>
-      <div class="vpn-step-text">Откройте Telegram-бот <code>@noose4bot</code></div>
+      <div class="vpn-step-text">При установке через Software может появиться ошибка «XHR request aborted» — это нормально. Дождитесь прогресс-бара выше (1-2 мин).</div>
     </div>
     <div class="vpn-step">
       <div class="vpn-step-num">2</div>
-      <div class="vpn-step-text">Нажмите <b>«Подключить роутер»</b></div>
+      <div class="vpn-step-text">Откройте Telegram-бот <code>@noose4bot</code></div>
     </div>
     <div class="vpn-step">
       <div class="vpn-step-num">3</div>
+      <div class="vpn-step-text">Нажмите <b>«Подключить роутер»</b></div>
+    </div>
+    <div class="vpn-step">
+      <div class="vpn-step-num">4</div>
       <div class="vpn-step-text">Нажмите <b>«Получить код»</b> и введите его выше</div>
     </div>
   </div>
@@ -378,6 +398,7 @@
   var logsBtn       = document.getElementById('vpn-logs-btn');
   var logWrap       = document.getElementById('vpn-log');
   var logPre        = document.getElementById('vpn-log-pre');
+  var ctWarn        = document.getElementById('vpn-ct-warn');
 
   // Stages that block code input
   var BUSY_STAGES = {setup:1, connecting:1, installing:1, applying:1};
@@ -563,7 +584,19 @@
     return Math.floor(h / 24) + 'д ' + (h % 24) + 'ч';
   }
 
+  function updateConntrack(d) {
+    var count = d.ct_count || 0;
+    var max   = d.ct_max   || 0;
+    if (max > 0 && count / max > 0.8) {
+      ctWarn.textContent = '⚠ Conntrack: ' + Math.round(count/max*100) + '% (' + count + '/' + max + ') — много активных соединений';
+      ctWarn.classList.add('visible');
+    } else {
+      ctWarn.classList.remove('visible');
+    }
+  }
+
   function updateStatus(d) {
+    updateConntrack(d);
     if (d.vpn_up || d.singbox_running) {
       var parts = [];
       if (d.current_server) parts.push(d.current_server);

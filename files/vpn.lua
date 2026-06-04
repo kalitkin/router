@@ -204,6 +204,9 @@ function action_status()
         tproxy_active = nft_ok and rule_ok
     end
 
+    local ct_count = tonumber(sys.exec("cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null") or "0") or 0
+    local ct_max   = tonumber(sys.exec("cat /proc/sys/net/netfilter/nf_conntrack_max   2>/dev/null") or "0") or 0
+
     http.prepare_content("application/json")
     http.write(
         '{"registered":'       .. (registered      and "true" or "false") ..
@@ -215,6 +218,8 @@ function action_status()
         ',"device_id":"'       .. device_id .. '"'  ..
         ',"current_server":"'  .. current_server .. '"' ..
         ',"wan_ip":""'         ..
-        ',"vpn_since":'        .. tostring(vpn_since) .. '}'
+        ',"vpn_since":'        .. tostring(vpn_since) ..
+        ',"ct_count":'         .. tostring(ct_count) ..
+        ',"ct_max":'           .. tostring(ct_max) .. '}'
     )
 end
