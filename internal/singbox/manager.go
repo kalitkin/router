@@ -449,7 +449,7 @@ func (m *Manager) ReapplyPatch() (bool, error) {
 //   - ip rule prio 500: fwmark 0x64 → main (sing-box outbound bypasses TPROXY)
 //   - ip route table 100: local 0.0.0.0/0 dev lo (kernel delivers to tproxy socket)
 func (m *Manager) SetupRouting() error {
-	const waitTimeout = 15 * time.Second
+	const waitTimeout = 30 * time.Second
 
 	// Wait for sing-box TPROXY port to be ready.
 	addr := fmt.Sprintf("127.0.0.1:%d", tproxyPort)
