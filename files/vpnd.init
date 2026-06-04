@@ -15,7 +15,7 @@ start_service() {
     # TPROXY creates 2 entries per TCP connection; default timeout ~120h causes bloat.
     local ct=/proc/sys/net/netfilter
     [ -f "$ct/nf_conntrack_tcp_timeout_established" ] && {
-        echo 600 > "$ct/nf_conntrack_tcp_timeout_established"
+        echo 300 > "$ct/nf_conntrack_tcp_timeout_established"
         echo 60  > "$ct/nf_conntrack_tcp_timeout_time_wait"
         echo 30  > "$ct/nf_conntrack_tcp_timeout_close_wait"
         echo 10  > "$ct/nf_conntrack_tcp_timeout_fin_wait"
