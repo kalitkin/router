@@ -59,11 +59,11 @@ fi
 # Lower to 10 minutes; TIME_WAIT and others get tighter limits too.
 CT=/proc/sys/net/netfilter
 if [ -f "$CT/nf_conntrack_tcp_timeout_established" ]; then
-    echo 600   > "$CT/nf_conntrack_tcp_timeout_established"
+    echo 300   > "$CT/nf_conntrack_tcp_timeout_established"
     echo 60    > "$CT/nf_conntrack_tcp_timeout_time_wait"
     echo 30    > "$CT/nf_conntrack_tcp_timeout_close_wait"
     echo 10    > "$CT/nf_conntrack_tcp_timeout_fin_wait"
-    log "conntrack: TCP timeouts tuned (established=600s)"
+    log "conntrack: TCP timeouts tuned (established=300s)"
 fi
 
 # ── 4. Sentinel ───────────────────────────────────────────────────────────
