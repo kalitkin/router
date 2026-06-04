@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -452,12 +453,14 @@ func (m *Manager) SetupRouting() error {
 	const waitTimeout = 30 * time.Second
 
 	// Wait for sing-box TPROXY port to be ready.
-	addr := fmt.Sprintf("127.0.0.1:%d", tproxyPort)
+	// IMPORTANT: do NOT use net.Dial here — connecting to the TPROXY port from
+	// the router itself triggers a routing loop: sing-box accepts the connection,
+	// sees dst=127.0.0.1:7893, routes it via "direct" outbound back to 7893,
+	// which is accepted again, ad infinitum. This floods conntrack with thousands
+	// of TIME_WAIT loopback entries and spikes CPU. Instead, check /proc/net/tcp.
 	deadline := time.Now().Add(waitTimeout)
 	for {
-		conn, err := net.DialTimeout("tcp", addr, time.Second)
-		if err == nil {
-			conn.Close()
+		if isTCPPortListening(tproxyPort) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -753,4 +756,33 @@ func writeAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// isTCPPortListening returns true if any process is listening on the given
+// TCP port. Reads /proc/net/tcp and /proc/net/tcp6; state 0x0A = LISTEN.
+// Used instead of net.Dial to avoid triggering routing loops on TPROXY ports.
+func isTCPPortListening(port int) bool {
+	hexPort := fmt.Sprintf("%04X", port)
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Scan() // skip header
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) < 4 {
+				continue
+			}
+			// fields[1] = local_address "IP:PORT" in hex, fields[3] = state
+			parts := strings.SplitN(fields[1], ":", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[1], hexPort) && fields[3] == "0A" {
+				f.Close()
+				return true
+			}
+		}
+		f.Close()
+	}
+	return false
 }
