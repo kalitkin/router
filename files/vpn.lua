@@ -67,34 +67,40 @@ function action_connect()
 end
 
 function action_direct()
-    sys.exec("/etc/init.d/sing-box stop 2>/dev/null; " ..
-             "/etc/init.d/vpnd stop 2>/dev/null; " ..
-             "rm -f /etc/vpn/vpn_started")
+    -- Clean up TPROXY rules first so LAN traffic goes direct immediately,
+    -- then stop vpnd before sing-box (vpnd would restart sing-box otherwise).
+    sys.exec(
+        "nft delete table inet vpnbot 2>/dev/null; " ..
+        "ip rule del fwmark 0x1 priority 100 2>/dev/null; " ..
+        "ip rule del fwmark 0x64 priority 500 2>/dev/null; " ..
+        "/etc/init.d/vpnd stop 2>/dev/null; " ..
+        "/etc/init.d/sing-box stop 2>/dev/null"
+    )
     http.prepare_content("application/json")
     http.write('{"ok":true}')
 end
 
 function action_logs()
-    local log_file = "/tmp/vpnd-install.log"
-    local fallback = "/tmp/vpn.log"
-    local path = log_file
-    if not fs.access(log_file) then path = fallback end
-
     local lines = {}
-    local f = io.open(path, "r")
+
+    -- Runtime logs from syslog (vpnd + sing-box)
+    local raw = sys.exec("logread 2>/dev/null | grep -E '\\[vpnd\\]|\\[singbox\\]' | tail -50")
+    for line in raw:gmatch("[^\n]+") do
+        lines[#lines + 1] = line:gsub('\\', '\\\\'):gsub('"', '\\"')
+    end
+
+    -- Install log (useful during first setup)
+    local f = io.open("/tmp/vpnd-install.log", "r")
     if f then
         for line in f:lines() do
-            lines[#lines + 1] = line
+            lines[#lines + 1] = ("[install] " .. line):gsub('\\', '\\\\'):gsub('"', '\\"')
         end
         f:close()
     end
 
-    -- последние 50 строк
     local start = #lines > 50 and (#lines - 49) or 1
     local out = {}
-    for i = start, #lines do
-        out[#out + 1] = lines[i]:gsub('\\', '\\\\'):gsub('"', '\\"')
-    end
+    for i = start, #lines do out[#out + 1] = lines[i] end
 
     http.prepare_content("application/json")
     http.write('{"lines":["' .. table.concat(out, '","') .. '"]}')
@@ -137,35 +143,76 @@ rm -f /tmp/.vpn-update.sh
 end
 
 function action_status()
-    local registered = fs.access("/etc/vpn/token") ~= nil
+    local registered  = fs.access("/etc/vpn/token") ~= nil
     local config_data = fs.readfile("/etc/sing-box/config.json")
-    local connected = config_data ~= nil and config_data ~= ""
+    local connected   = config_data ~= nil and config_data ~= ""
 
     local device_id = ""
     local did = fs.readfile("/etc/vpn/device_id")
     if did then device_id = did:gsub("[%s]+", "") end
 
+    local current_server = ""
+    local sv = fs.readfile("/etc/vpn/current_server")
+    if sv then current_server = sv:gsub("[%s]+", "") end
+
     local vpnd_running    = sys.exec("pgrep -x vpnd >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
     local singbox_running = sys.exec("pgrep -x sing-box >/dev/null 2>&1 && echo 1 || echo 0"):match("1") ~= nil
 
+    -- sing-box start time from /proc/<pid>/stat field 22 (starttime in clock ticks)
     local vpn_since = 0
-    local since_f = fs.readfile("/etc/vpn/vpn_started")
-    if since_f then
-        local n = tonumber(since_f:match("%d+"))
-        if n then vpn_since = n end
+    if singbox_running then
+        local sb_pid = sys.exec("pgrep -x sing-box 2>/dev/null"):match("(%d+)")
+        if sb_pid then
+            local stat_f = io.open("/proc/" .. sb_pid .. "/stat", "r")
+            if stat_f then
+                local data = stat_f:read("*all")
+                stat_f:close()
+                -- Skip "pid (comm) " — comm may contain spaces, find the last ')'
+                local rest = data:match("%)%s+(.*)")
+                if rest then
+                    local i = 0
+                    for v in rest:gmatch("%S+") do
+                        i = i + 1
+                        if i == 20 then  -- starttime = field 22 overall = field 20 after pid+comm
+                            local ticks = tonumber(v)
+                            local uptime_f = io.open("/proc/uptime", "r")
+                            if uptime_f and ticks then
+                                local ud = uptime_f:read("*all")
+                                uptime_f:close()
+                                local uptime_sec = tonumber(ud:match("^([%d%.]+)"))
+                                if uptime_sec then
+                                    vpn_since = math.floor(os.time() - uptime_sec + ticks / 100)
+                                end
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
     end
 
     local vpn_up = singbox_running and connected
 
+    -- TPROXY health: nft table active + fwmark ip rule present
+    local tproxy_active = false
+    if singbox_running then
+        local nft_ok  = sys.exec("nft list table inet vpnbot 2>/dev/null | grep -c mangle_pre"):match("[1-9]") ~= nil
+        local rule_ok = sys.exec("ip rule show 2>/dev/null | grep -c 'fwmark 0x1'"):match("[1-9]") ~= nil
+        tproxy_active = nft_ok and rule_ok
+    end
+
     http.prepare_content("application/json")
     http.write(
-        '{"registered":'      .. (registered      and "true" or "false") ..
-        ',"connected":'       .. (connected        and "true" or "false") ..
-        ',"vpn_up":'          .. (vpn_up           and "true" or "false") ..
-        ',"vpnd_running":'    .. (vpnd_running      and "true" or "false") ..
-        ',"singbox_running":' .. (singbox_running   and "true" or "false") ..
-        ',"device_id":"'      .. device_id .. '"'  ..
-        ',"wan_ip":""'        ..
-        ',"vpn_since":'       .. tostring(vpn_since) .. '}'
+        '{"registered":'       .. (registered      and "true" or "false") ..
+        ',"connected":'        .. (connected        and "true" or "false") ..
+        ',"vpn_up":'           .. (vpn_up           and "true" or "false") ..
+        ',"vpnd_running":'     .. (vpnd_running      and "true" or "false") ..
+        ',"singbox_running":'  .. (singbox_running   and "true" or "false") ..
+        ',"tproxy_active":'    .. (tproxy_active     and "true" or "false") ..
+        ',"device_id":"'       .. device_id .. '"'  ..
+        ',"current_server":"'  .. current_server .. '"' ..
+        ',"wan_ip":""'         ..
+        ',"vpn_since":'        .. tostring(vpn_since) .. '}'
     )
 end

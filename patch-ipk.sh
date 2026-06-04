@@ -2,6 +2,16 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r19:
+#   - vpn.lua action_direct: чистит nft table inet vpnbot + ip rules перед остановкой,
+#     иначе LAN-клиенты теряют интернет (TPROXY-marked пакеты некому принимать)
+#   - vpn.lua action_direct: правильный порядок — vpnd stop до sing-box stop
+#   - vpn.lua action_status: vpn_since из /proc/<pid>/stat (поле 22), не из vpn_started файла
+#   - vpn.lua action_status: добавлены tproxy_active + current_server в ответ
+#   - vpn.lua action_logs: runtime логи из syslog (logread), не только install log
+#   - index.htm: показывает current_server в строке статуса VPN
+#   - Bump r19
+#
 # Изменения v1.3.0-r18:
 #   - extractVPSIPs: фильтр IPv6 (fc00::/7 и подобные) → nftset ipv4_addr не принимает IPv6
 #   - postinst: ждём освобождения opkg lock перед kmod install
@@ -45,7 +55,7 @@
 #   - postinst: fallback arch detection через DISTRIB_ARCH из openwrt_release
 #
 # Использование:
-#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r11_all.ipk
+#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r19_all.ipk
 #   ./patch-ipk.sh output.ipk   # указать имя результата
 ###############################################################################
 
@@ -53,11 +63,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r18_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r19_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="18"
+PKG_RELEASE="19"
 
 CDN="https://self-music.online/packages/latest"
 
