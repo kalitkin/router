@@ -65,6 +65,10 @@ type Agent struct {
 	lastConfigURL string    // TASK-03: skip reconcile when URL unchanged
 	startedAt     time.Time // for UptimeSec in heartbeat
 
+	// server ping cache (TASK-02): refreshed every pingRefreshInterval
+	lastPings     []api.ServerInfo
+	lastPingAt    time.Time
+
 	// inter-loop signalling
 	forceReconcile chan struct{}
 }

@@ -41,11 +41,18 @@ func NewClient(baseURL, token string) *Client {
 
 // ── Heartbeat ──────────────────────────────────────────────────────────────────
 
+// ServerInfo carries a server name and its measured round-trip delay.
+// PingMS == 0 means the server was unreachable during the last ping sweep.
+type ServerInfo struct {
+	Name   string `json:"name"`
+	PingMS int    `json:"ping_ms,omitempty"`
+}
+
 type HeartbeatReq struct {
-	IP               string         `json:"ip,omitempty"`
-	FirmwareVersion  string         `json:"firmware_version,omitempty"`
-	CurrentServer    string         `json:"current_server,omitempty"`
-	AvailableServers []string       `json:"available_servers,omitempty"`
+	IP               string       `json:"ip,omitempty"`
+	FirmwareVersion  string       `json:"firmware_version,omitempty"`
+	CurrentServer    string       `json:"current_server,omitempty"`
+	AvailableServers []ServerInfo `json:"available_servers,omitempty"`
 	CommandResult    *CommandResult `json:"command_result,omitempty"`
 	SingboxRSSKB     int64          `json:"singbox_rss_kb,omitempty"`
 	ConntrackCount   int            `json:"conntrack_count,omitempty"`

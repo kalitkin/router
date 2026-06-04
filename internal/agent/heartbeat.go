@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	pingInterval     = 45 * time.Second
-	pingRetryDelay   = 10 * time.Second
-	circuitThreshold = 7
-	circuitCooldown  = 5 * time.Minute
+	pingInterval        = 45 * time.Second
+	pingRetryDelay      = 10 * time.Second
+	circuitThreshold    = 7
+	circuitCooldown     = 5 * time.Minute
+	pingRefreshInterval = 3 * time.Minute // how often to re-test all server pings
 )
 
 func (a *Agent) heartbeatLoop(ctx context.Context, configCh chan<- string, cmdCh chan<- *Command) {
@@ -54,9 +55,27 @@ func (a *Agent) doHeartbeat(
 
 	// Collect current state to report.
 	currentServer, _ := a.sb.CurrentServer()
-	availableServers, _ := a.sb.ListServers()
+
+	// Refresh server pings every pingRefreshInterval; send cached value otherwise.
+	a.mu.Lock()
+	needPingRefresh := time.Since(a.lastPingAt) >= pingRefreshInterval
+	a.mu.Unlock()
+
+	if needPingRefresh {
+		if raw, err := a.sb.ListServersWithDelay(); err == nil {
+			pings := make([]api.ServerInfo, len(raw))
+			for i, s := range raw {
+				pings[i] = api.ServerInfo{Name: s.Name, PingMS: s.PingMS}
+			}
+			a.mu.Lock()
+			a.lastPings = pings
+			a.lastPingAt = time.Now()
+			a.mu.Unlock()
+		}
+	}
 
 	a.mu.Lock()
+	availableServers := a.lastPings
 	cmdResult := a.lastCmdResult
 	a.lastCmdResult = nil // clear — will be sent this heartbeat
 	a.mu.Unlock()

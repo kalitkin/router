@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+// ServerPing holds a server name and its measured round-trip delay.
+// PingMS == 0 means the server was unreachable during the test.
+type ServerPing struct {
+	Name   string
+	PingMS int
+}
+
 const (
 	clashAPIURL    = "http://127.0.0.1:9090"
 	configPath     = "/etc/sing-box/config.json"
@@ -171,6 +178,49 @@ func (m *Manager) ListServers() ([]string, error) {
 		return nil, err
 	}
 	return info.All, nil
+}
+
+// ListServersWithDelay returns all selector servers with their measured ping.
+// Each server is tested in parallel; unreachable ones get PingMS == 0.
+// Runs for at most 12 seconds total.
+func (m *Manager) ListServersWithDelay() ([]ServerPing, error) {
+	servers, err := m.ListServers()
+	if err != nil {
+		return nil, err
+	}
+
+	type result struct {
+		idx   int
+		delay int
+	}
+	ch := make(chan result, len(servers))
+
+	for i, name := range servers {
+		i, name := i, name
+		go func() {
+			d, err := m.TestServerDelay(name)
+			if err != nil {
+				d = 0
+			}
+			ch <- result{idx: i, delay: d}
+		}()
+	}
+
+	pings := make([]ServerPing, len(servers))
+	for i, name := range servers {
+		pings[i] = ServerPing{Name: name}
+	}
+
+	timeout := time.After(12 * time.Second)
+	for range servers {
+		select {
+		case r := <-ch:
+			pings[r.idx].PingMS = r.delay
+		case <-timeout:
+			return pings, nil
+		}
+	}
+	return pings, nil
 }
 
 // TestServerDelay measures round-trip delay to the test URL via the named proxy.
