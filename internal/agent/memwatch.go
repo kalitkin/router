@@ -14,7 +14,7 @@ import (
 const (
 	memWatchInterval = 5 * time.Minute
 	memAvailableMin  = 12 * 1024 // kB — restart if MemAvailable < 12 MB
-	singboxRSSMax    = 18 * 1024 // kB — restart if sing-box RSS > 18 MB
+	singboxRSSMax    = 22 * 1024 // kB — restart if sing-box RSS > 22 MB (normal baseline is 18-21 MB)
 	maxSingboxUptime = 24 * time.Hour
 	memWatchCooldown = 15 * time.Minute // min interval between memwatch-triggered restarts
 )
