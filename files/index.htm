@@ -372,6 +372,7 @@
   var _systemReady  = false;
   var _isUpdating   = false;
   var _logsVisible  = false;
+  var _afterConnect = false; // true after code entry until VPN confirms up
   var updateBtn     = document.getElementById('vpn-update-btn');
   var directBtn     = document.getElementById('vpn-direct-btn');
   var logsBtn       = document.getElementById('vpn-logs-btn');
@@ -395,7 +396,7 @@
   }
 
   function checkReady() {
-    var ok = getCode().length === 6 && _systemReady;
+    var ok = getCode().length === 6 && _systemReady && !_afterConnect;
     btn.disabled = !ok;
     return ok;
   }
@@ -569,12 +570,16 @@
       if (d.vpn_since)      parts.push('работает ' + fmtUptime(d.vpn_since));
       var sub = parts.join(' · ') || 'Device: ' + (d.device_id || '—').substring(0, 8) + '…';
       setStatus('is-up', 'VPN работает', sub);
-    } else if (d.connected) {
-      var sub2 = 'vpnd: ' + (d.vpnd_running ? '✓' : '✗') + '  sing-box: ' + (d.singbox_running ? '✓' : '✗');
-      setStatus('is-wait', 'Конфиг получен, sing-box не запущен', sub2);
+      if (_afterConnect) { _afterConnect = false; checkReady(); }
+      if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = setInterval(fetchStatus, 15000); }
     } else if (d.registered) {
-      setStatus('is-wait', 'Зарегистрирован — ожидание конфига…',
-        'Обычно занимает 5–30 секунд.');
+      var sub2;
+      if (d.vpnd_running) {
+        sub2 = 'vpnd работает' + (d.connected ? ', запускаем sing-box…' : ', ожидание конфига…');
+      } else {
+        sub2 = d.connected ? 'sing-box не запущен, перезапускаем…' : 'Ожидание первого соединения…';
+      }
+      setStatus('is-wait', 'VPN запускается…', sub2);
     } else {
       setStatus('', 'Не подключён', 'Введите код из Telegram.');
     }
@@ -710,8 +715,13 @@
             '<b>✓ Подключено!</b><br>Device: ' +
             (d.device_id || '').substring(0,8) + '…<br>' +
             'Применяем настройки...');
-          setStatus('is-wait', 'Зарегистрирован — настройка VPN…',
-            'Обычно занимает 1–3 минуты.');
+          setStatus('is-wait', 'VPN запускается…', 'Ожидание первого соединения…');
+          _afterConnect = true;
+          checkReady();
+          // Poll status every 5s while VPN is starting
+          if (_statusTimer) clearInterval(_statusTimer);
+          _statusTimer = setInterval(fetchStatus, 5000);
+          fetchStatus();
           startPoll();
         } else {
           showResult(false, '<b>Ошибка:</b> ' + (d.error || 'Неизвестная ошибка'));

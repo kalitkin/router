@@ -309,6 +309,8 @@ ENDSETUP
 
 sed -i "s|__CDN__|${CDN}|g" "\$SETUP"
 chmod +x "\$SETUP"
+# Write initial progress BEFORE launch so LuCI blocks code input immediately
+printf '{"stage":"setup","pct":1,"msg":"Установка компонентов..."}' > "\$PROG"
 (sh "\$SETUP" >> /dev/null 2>&1) &
 
 # Синхронно: очищаем кеш и перезапускаем uhttpd
