@@ -314,7 +314,6 @@ func (m *Manager) ReapplyPatch() (bool, error) {
 //
 // Routing scheme:
 //   - nftables inet vpnbot/mangle_pre: br-lan traffic → TPROXY port 7893
-//   - nftables inet vpnbot/mangle_out: router own traffic → TPROXY (DPI protection)
 //   - ip rule prio 100: fwmark 0x1 → table 100 (TPROXY mark → loopback delivery)
 //   - ip rule prio 500: fwmark 0x64 → main (sing-box outbound bypasses TPROXY)
 //   - ip route table 100: local 0.0.0.0/0 dev lo (kernel delivers to tproxy socket)
@@ -390,10 +389,14 @@ func (m *Manager) SetupRouting() error {
 
 // buildNFTScript returns a complete nftables table definition for TPROXY.
 //
-// Three chains:
+// Two chains:
 //   - MANGLE: inner chain; skips RFC1918, VPS IPs, ct reply; TPROXY TCP+UDP
 //   - mangle_pre: prerouting hook -150; routes br-lan ingress into MANGLE
-//   - mangle_out: output hook -150 (type route); marks router-own traffic
+//
+// Only LAN-forwarded traffic is TPROXY'd. Router's own traffic goes direct
+// through the main routing table (NTP, DNS, system updates work normally).
+// vpnd heartbeat bypasses nftables entirely via vpnbot_vps set (the API
+// server IP is in route_exclude_address and therefore in vpnbot_vps).
 func buildNFTScript(vpsIPs []string) string {
 	var b strings.Builder
 
@@ -421,7 +424,7 @@ func buildNFTScript(vpsIPs []string) string {
 	}
 	b.WriteString("\t}\n")
 
-	// Inner chain: TPROXY action for LAN-forwarded and router-own traffic.
+	// Inner chain: TPROXY for br-lan forwarded traffic.
 	b.WriteString("\tchain MANGLE {\n")
 	b.WriteString("\t\tip daddr @vpnbot_lan return\n")
 	b.WriteString("\t\tip daddr @vpnbot_vps return\n")
@@ -431,21 +434,9 @@ func buildNFTScript(vpsIPs []string) string {
 	b.WriteString("\t}\n")
 
 	// Hook: intercept LAN-forwarded traffic (br-lan ingress).
-	// br-lan is the standard OpenWrt LAN bridge interface name.
 	b.WriteString("\tchain mangle_pre {\n")
 	b.WriteString("\t\ttype filter hook prerouting priority -150; policy accept;\n")
 	b.WriteString("\t\tiifname \"br-lan\" jump MANGLE\n")
-	b.WriteString("\t}\n")
-
-	// Hook: intercept router's own outbound traffic (vpnd heartbeat DPI protection).
-	// type route enables kernel re-routing when fwmark changes.
-	b.WriteString("\tchain mangle_out {\n")
-	b.WriteString("\t\ttype route hook output priority -150; policy accept;\n")
-	b.WriteString("\t\toif \"lo\" return\n")
-	fmt.Fprintf(&b, "\t\tmeta mark %s return\n", bypassFwmark)
-	b.WriteString("\t\tip daddr @vpnbot_lan return\n")
-	b.WriteString("\t\tip daddr @vpnbot_vps return\n")
-	fmt.Fprintf(&b, "\t\tmeta l4proto { tcp, udp } meta mark set %s\n", tproxyFwmark)
 	b.WriteString("\t}\n")
 
 	b.WriteString("}\n")
