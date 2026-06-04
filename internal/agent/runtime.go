@@ -52,6 +52,10 @@ type Agent struct {
 	// health state
 	l2FailCount int // consecutive Clash API failures
 
+	// memwatch state
+	singboxStartedAt time.Time // updated after every sing-box restart
+	lastMemRestart   time.Time // cooldown: memwatch won't restart more often than memWatchCooldown
+
 	// command state
 	lastCmdID     string         // dedup: skip already-executed commands
 	lastCmdResult *CommandResult // reported on next heartbeat
@@ -84,6 +88,12 @@ func (a *Agent) Run() {
 	// matching the single Command field in HeartbeatResp)
 	cmdCh := make(chan *Command, 1)
 
+	// Approximate sing-box start time for the uptime-based scheduled restart.
+	// Will be corrected to an exact timestamp on the first restart.
+	if a.sb.IsRunning() {
+		a.singboxStartedAt = time.Now()
+	}
+
 	var wg sync.WaitGroup
 
 	for _, fn := range []func(){
@@ -91,6 +101,7 @@ func (a *Agent) Run() {
 		func() { a.reconcileLoop(ctx, configCh) },
 		func() { a.healthLoop(ctx) },
 		func() { a.commandLoop(ctx, cmdCh) },
+		func() { a.memWatchLoop(ctx) },
 	} {
 		wg.Add(1)
 		go func(f func()) {
@@ -105,6 +116,16 @@ func (a *Agent) Run() {
 	a.log.Println("shutting down")
 	cancel()
 	wg.Wait()
+}
+
+// noteRestart records that sing-box was just (re)started.
+// Call after every successful Restart() to keep memwatch uptime tracking accurate.
+func (a *Agent) noteRestart() {
+	now := time.Now()
+	a.mu.Lock()
+	a.singboxStartedAt = now
+	a.l2FailCount = 0
+	a.mu.Unlock()
 }
 
 // localIP returns the first non-loopback IPv4 on known interfaces.

@@ -62,6 +62,7 @@ func (a *Agent) executeCommand(cmd *Command) CommandResult {
 		if err = a.sb.Restart(); err != nil {
 			return failResult(cmd.ID, err.Error())
 		}
+		a.noteRestart()
 		a.log.Printf("command %s: sing-box restarted", cmd.ID)
 
 	case "update":

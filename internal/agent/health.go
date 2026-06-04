@@ -39,12 +39,7 @@ func (a *Agent) checkHealth() {
 		} else {
 			a.log.Println("health L1: sing-box recovered")
 			a.restoreServer()
-			// Reset L2 counter — the process was just (re)started, Clash API
-			// needs a moment to come up. A stale counter would trigger an
-			// unnecessary L2 restart on the very next health tick.
-			a.mu.Lock()
-			a.l2FailCount = 0
-			a.mu.Unlock()
+			a.noteRestart()
 		}
 		return
 	}
@@ -59,15 +54,13 @@ func (a *Agent) checkHealth() {
 		a.mu.Unlock()
 		a.log.Printf("health L2: Clash API not responding (%d/%d)", count, l2RestartThreshold)
 		if count >= l2RestartThreshold {
-			a.mu.Lock()
-			a.l2FailCount = 0
-			a.mu.Unlock()
 			a.log.Println("health L2: threshold reached — restarting")
 			if err := a.sb.Restart(); err != nil {
 				a.log.Printf("health L2: restart failed: %v", err)
 			} else {
 				a.log.Println("health L2: sing-box restarted")
 				a.restoreServer()
+				a.noteRestart()
 			}
 		}
 	} else {
