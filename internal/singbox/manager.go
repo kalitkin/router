@@ -555,6 +555,14 @@ func buildNFTScript(vpsIPs []string) string {
 	}
 	b.WriteString("\t}\n")
 
+	// DIVERT: fast-path for established TPROXY connections.
+	// If a transparent socket already exists for this TCP flow, mark and accept
+	// immediately — skip the full MANGLE classification chain.
+	// Requires kmod-nft-socket (loaded in SetupRouting via modprobe nft_socket).
+	b.WriteString("\tchain DIVERT {\n")
+	fmt.Fprintf(&b, "\t\tmeta l4proto tcp socket transparent 1 meta mark set %s accept\n", tproxyFwmark)
+	b.WriteString("\t}\n")
+
 	// Inner chain: TPROXY for br-lan forwarded traffic.
 	b.WriteString("\tchain MANGLE {\n")
 	b.WriteString("\t\tip daddr @vpnbot_lan return\n")
@@ -565,8 +573,10 @@ func buildNFTScript(vpsIPs []string) string {
 	b.WriteString("\t}\n")
 
 	// Hook: intercept LAN-forwarded traffic (br-lan ingress).
+	// DIVERT fires first — established TCP flows bypass MANGLE entirely.
 	b.WriteString("\tchain mangle_pre {\n")
 	b.WriteString("\t\ttype filter hook prerouting priority -150; policy accept;\n")
+	b.WriteString("\t\tiifname \"br-lan\" jump DIVERT\n")
 	b.WriteString("\t\tiifname \"br-lan\" jump MANGLE\n")
 	b.WriteString("\t}\n")
 
