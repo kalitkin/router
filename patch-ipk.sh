@@ -2,6 +2,12 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r15:
+#   - vpnd.init: GOMEMLIMIT=10MiB — Go GC для vpnd, аналогично sing-box.init
+#
+# Изменения v1.3.0-r14:
+#   - sing-box.init: /usr/bin/env wrapper вместо procd_set_param env (не работает на OpenWrt)
+#
 # Изменения v1.3.0-r13:
 #   - sing-box.init: GOMEMLIMIT=20MiB — Go GC запускается при 20MB heap,
 #     предотвращает OOM (без лимита Go держит heap до 2x live set → падение)
@@ -27,11 +33,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r14_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r15_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="14"
+PKG_RELEASE="15"
 
 CDN="https://self-music.online/packages/latest"
 
