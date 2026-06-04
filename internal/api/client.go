@@ -44,9 +44,12 @@ func NewClient(baseURL, token string) *Client {
 type HeartbeatReq struct {
 	IP               string         `json:"ip,omitempty"`
 	FirmwareVersion  string         `json:"firmware_version,omitempty"`
-	CurrentServer    string         `json:"current_server,omitempty"`    // active sing-box proxy
-	AvailableServers []string       `json:"available_servers,omitempty"` // all selector outbounds
-	CommandResult    *CommandResult `json:"command_result,omitempty"`    // result of last command
+	CurrentServer    string         `json:"current_server,omitempty"`
+	AvailableServers []string       `json:"available_servers,omitempty"`
+	CommandResult    *CommandResult `json:"command_result,omitempty"`
+	SingboxRSSKB     int64          `json:"singbox_rss_kb,omitempty"`
+	ConntrackCount   int            `json:"conntrack_count,omitempty"`
+	UptimeSec        int64          `json:"uptime_sec,omitempty"`
 }
 
 // CommandResult mirrors agent.CommandResult but lives here to avoid import cycle.

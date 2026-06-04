@@ -61,6 +61,10 @@ type Agent struct {
 	lastCmdID     string         // dedup: skip already-executed commands
 	lastCmdResult *CommandResult // reported on next heartbeat
 
+	// heartbeat state
+	lastConfigURL string    // TASK-03: skip reconcile when URL unchanged
+	startedAt     time.Time // for UptimeSec in heartbeat
+
 	// inter-loop signalling
 	forceReconcile chan struct{}
 }
@@ -72,6 +76,7 @@ func New(cfg Config) *Agent {
 		sb:             singbox.NewManager(),
 		log:            log.New(os.Stderr, "[vpnd] ", log.LstdFlags),
 		forceReconcile: make(chan struct{}, 1),
+		startedAt:      time.Now(),
 	}
 }
 
