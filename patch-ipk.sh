@@ -2,6 +2,13 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r20:
+#   - Убраны luci-lua-runtime, curl, ca-bundle из Depends (они в tmpfs после ребута)
+#   - postinst фоновый скрипт ставит их сам после opkg update (уже запускается для kmod)
+#   - uhttpd перезапускается если luci-lua-runtime был только что установлен
+#   - Клиенты теперь могут ставить пакет через opkg install URL без SSH и opkg update
+#   - Bump r20
+#
 # Изменения v1.3.0-r19:
 #   - vpn.lua action_direct: чистит nft table inet vpnbot + ip rules перед остановкой,
 #     иначе LAN-клиенты теряют интернет (TPROXY-marked пакеты некому принимать)
@@ -55,7 +62,7 @@
 #   - postinst: fallback arch detection через DISTRIB_ARCH из openwrt_release
 #
 # Использование:
-#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r19_all.ipk
+#   ./patch-ipk.sh              # собирает luci-app-vpnbot_1.3.0-r20_all.ipk
 #   ./patch-ipk.sh output.ipk   # указать имя результата
 ###############################################################################
 
@@ -63,11 +70,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r19_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r20_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="19"
+PKG_RELEASE="20"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -124,7 +131,7 @@ INSTALLED_SIZE=$(du -sk "$TMPDIR/data" | cut -f1)
 cat > "$TMPDIR/ctrl/control" << CTRL
 Package: $PKG_NAME
 Version: ${PKG_VERSION}-r${PKG_RELEASE}
-Depends: libc, luci-base, luci-lua-runtime, jsonfilter, curl, ca-bundle
+Depends: libc, luci-base, jsonfilter
 License: MIT
 Section: luci
 Architecture: all
@@ -190,14 +197,47 @@ OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {
 [ -z "\$OWRT_ARCH" ] && OWRT_ARCH=\$(grep '^DISTRIB_ARCH=' /etc/openwrt_release 2>/dev/null | cut -d= -f2 | tr -d "'\"")
 log "arch=\$OWRT_ARCH"
 
-# ── 4. kmod-nft-tproxy ───────────────────────────────────────────────
-# Required for TPROXY transparent proxy (replaces TUN/gVisor).
+# ── 4. opkg update + runtime deps ───────────────────────────────────
+# opkg package lists live in tmpfs — cleared after every reboot.
+# luci-lua-runtime and curl are NOT in Depends (would block install after reboot).
+# We install them here after opkg update which we need anyway for kmod.
+NEED_UPDATE=0
+find /lib/modules -name 'nft_tproxy*' 2>/dev/null | grep -q . || NEED_UPDATE=1
+opkg list-installed 2>/dev/null | grep -q '^luci-lua-runtime ' || NEED_UPDATE=1
+command -v curl >/dev/null 2>&1 || NEED_UPDATE=1
+
+if [ "\$NEED_UPDATE" = "1" ]; then
+    log "opkg: updating package lists..."
+    progress "setup" 8 "Обновление списков пакетов..."
+    opkg update >> "\$LOG" 2>&1 || true
+fi
+
+# kmod-nft-tproxy (TPROXY transparent proxy)
 if ! find /lib/modules -name 'nft_tproxy*' 2>/dev/null | grep -q .; then
     log "kmod: installing kmod-nft-tproxy + kmod-nft-socket..."
     progress "setup" 10 "Установка TPROXY модуля..."
-    opkg update >> "\$LOG" 2>&1 || true
     opkg install kmod-nft-tproxy kmod-nft-socket >> "\$LOG" 2>&1 || true
     log "kmod: done"
+fi
+
+# luci-lua-runtime (required for vpn.lua LuCI controller)
+LUCI_INSTALLED=0
+opkg list-installed 2>/dev/null | grep -q '^luci-lua-runtime ' && LUCI_INSTALLED=1
+if [ "\$LUCI_INSTALLED" = "0" ]; then
+    log "luci: installing luci-lua-runtime..."
+    progress "setup" 12 "Установка LuCI runtime..."
+    opkg install luci-lua-runtime >> "\$LOG" 2>&1 || true
+    rm -f /tmp/luci-indexcache* /tmp/luci-modulecache 2>/dev/null
+    /etc/init.d/uhttpd restart 2>/dev/null || true
+    log "luci: done"
+fi
+
+# curl + ca-bundle (required for vpn-connect.sh HTTPS requests)
+if ! command -v curl >/dev/null 2>&1; then
+    log "curl: installing curl + ca-bundle..."
+    progress "setup" 14 "Установка curl..."
+    opkg install curl ca-bundle >> "\$LOG" 2>&1 || true
+    log "curl: done"
 fi
 
 # ── 5. vpnd ───────────────────────────────────────────────────────────
