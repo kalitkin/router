@@ -2,6 +2,15 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r17:
+#   - TPROXY миграция: TUN/gVisor → kernel TPROXY (kmod-nft-tproxy)
+#   - RSS sing-box: 18-21MB → ~4-6MB (gVisor userspace TCP/IP стек устранён)
+#   - SetupRouting: nftables inet vpnbot (mangle_pre + mangle_out + MANGLE)
+#   - DPI-защита vpnd heartbeat через mangle_out OUTPUT chain
+#   - postinst: автоустановка kmod-nft-tproxy + kmod-nft-socket
+#   - Удалён kmod-tun из Depends (TUN интерфейс больше не нужен)
+#   - 99-vpnd.nft: убрана sing-tun forward rule, только icmp-bypass
+#
 # Изменения v1.3.0-r16:
 #   - vpnd: memWatchLoop горутина — проактивный рестарт sing-box при:
 #       MemAvailable < 12MB, RSS sing-box > 18MB, uptime > 24h
@@ -38,11 +47,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r16_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r17_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="16"
+PKG_RELEASE="17"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -99,7 +108,7 @@ INSTALLED_SIZE=$(du -sk "$TMPDIR/data" | cut -f1)
 cat > "$TMPDIR/ctrl/control" << CTRL
 Package: $PKG_NAME
 Version: ${PKG_VERSION}-r${PKG_RELEASE}
-Depends: libc, luci-base, luci-lua-runtime, jsonfilter, curl, ca-bundle, kmod-tun
+Depends: libc, luci-base, luci-lua-runtime, jsonfilter, curl, ca-bundle
 License: MIT
 Section: luci
 Architecture: all
@@ -151,13 +160,23 @@ if [ -x /usr/bin/vpn-bootstrap.sh ]; then
     log "zram: done"
 fi
 
-# ── 2. Архитектура ────────────────────────────────────────────────────
+# ── 2. kmod-nft-tproxy ───────────────────────────────────────────────
+# Required for TPROXY transparent proxy (replaces TUN/gVisor).
+if ! find /lib/modules -name 'nft_tproxy*' 2>/dev/null | grep -q .; then
+    log "kmod: installing kmod-nft-tproxy + kmod-nft-socket..."
+    progress "setup" 10 "Установка TPROXY модуля..."
+    opkg update >> "\$LOG" 2>&1 || true
+    opkg install kmod-nft-tproxy kmod-nft-socket >> "\$LOG" 2>&1 || true
+    log "kmod: done"
+fi
+
+# ── 3. Архитектура ────────────────────────────────────────────────────
 OWRT_ARCH=\$(opkg print-architecture 2>/dev/null | awk '\$1=="arch" && \$3>=10 {print \$2}' | grep -v 'all\|noarch' | tail -1)
 # Fallback: читаем DISTRIB_ARCH из /etc/openwrt_release
 [ -z "\$OWRT_ARCH" ] && OWRT_ARCH=\$(grep 'DISTRIB_ARCH' /etc/openwrt_release 2>/dev/null | cut -d'"' -f2)
 log "arch=\$OWRT_ARCH"
 
-# ── 3. vpnd ───────────────────────────────────────────────────────────
+# ── 4. vpnd ───────────────────────────────────────────────────────────
 # Always re-download vpnd so upgrades via --force-reinstall pick up the
 # latest binary. Download to .new, replace atomically only on success.
 log "vpnd: downloading..."
@@ -177,7 +196,7 @@ else
 fi
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-# ── 4. sing-box ───────────────────────────────────────────────────────
+# ── 5. sing-box ───────────────────────────────────────────────────────
 # sing-box is ~20MB — only download if missing.
 if [ ! -x /usr/bin/sing-box ]; then
     log "sing-box: downloading..."
@@ -195,7 +214,7 @@ else
     log "sing-box: already installed"
 fi
 
-# ── 5. Сервисы ────────────────────────────────────────────────────────
+# ── 6. Сервисы ────────────────────────────────────────────────────────
 progress "setup" 90 "Включаем сервисы..."
 mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 
@@ -206,24 +225,17 @@ mkdir -p /etc/vpn /etc/sing-box /var/lib/sing-box
 rm -f /tmp/luci-indexcache* 2>/dev/null
 rm -rf /tmp/luci-modulecache 2>/dev/null
 
-# ── 6. Firewall — fw4 forward chain has policy drop ──────────────────
-# Allow br-lan → sing-tun forwarding. Write persistent include so the
-# rule survives firewall reloads (netifd triggers reload on iface events).
+# ── 7. Firewall — ICMP bypass only (TPROXY handles forwarding) ───────
+# With TPROXY mode, br-lan traffic is intercepted by inet vpnbot/mangle_pre.
+# No forward rule for sing-tun needed. Keep ICMP bypass so pings go direct.
 if command -v nft >/dev/null 2>&1; then
     mkdir -p /etc/nftables.d
-    # Rule 1: allow br-lan → sing-tun forwarding (fw4 policy drop)
-    # Rule 2: bypass VPN for ICMP — sing-box can't proxy ICMP, gVisor accumulates
-    #         connection state from ICMP flood → OOM. Mark ICMP with 0x64 so it
-    #         takes the main table route (direct) instead of table 2022 (VPN).
     cat > /etc/nftables.d/99-vpnd.nft << 'NFTEOF'
-add rule inet fw4 forward_lan oifname "sing-tun" accept comment "vpnd"
 add rule inet fw4 prerouting meta l4proto { icmp, ipv6-icmp } mark set 0x64 comment "vpnd-icmp-bypass"
 NFTEOF
-    nft list chain inet fw4 forward_lan 2>/dev/null | grep -q 'sing-tun' || \
-        nft insert rule inet fw4 forward_lan oifname "sing-tun" accept 2>/dev/null || true
     nft list chain inet fw4 prerouting 2>/dev/null | grep -q 'vpnd-icmp-bypass' || \
         nft insert rule inet fw4 prerouting meta l4proto '{ icmp, ipv6-icmp }' mark set 0x64 2>/dev/null || true
-    log "nft: forward_lan + icmp-bypass done"
+    log "nft: icmp-bypass done"
 fi
 
 progress "ready" 100 ""

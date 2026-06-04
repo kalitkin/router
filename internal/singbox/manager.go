@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,7 +23,14 @@ const (
 	backupSuffix   = ".bak"
 	restartTimeout = 15 * time.Second
 	apiTimeout     = 8 * time.Second
-	selectorTag    = "proxy" // outbound tag used in Marzban-generated sing-box config
+	selectorTag    = "proxy" // outbound selector tag in Marzban-generated sing-box config
+
+	tproxyPort   = 7893          // sing-box TPROXY inbound port
+	tproxyFwmark = "0x1"         // fwmark set on packets to intercept
+	tproxyTable  = "100"         // routing table: local 0.0.0.0/0 dev lo
+	bypassFwmark = "0x64"        // sing-box outbound mark → bypasses TPROXY
+	nftTable     = "vpnbot"      // nftables table name
+	vpsIPsPath   = "/etc/vpn/vps_ips" // VPN server IPs extracted from config
 )
 
 // Manager controls the sing-box process lifecycle.
@@ -56,7 +64,7 @@ func (m *Manager) Apply(data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	patched, err := patchRouterConfig(data)
+	patched, vpsIPs, err := patchRouterConfig(data)
 	if err != nil {
 		return fmt.Errorf("patch config: %w", err)
 	}
@@ -64,22 +72,21 @@ func (m *Manager) Apply(data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(m.configPath), 0755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-
 	if err := writeAtomic(m.configPath, patched); err != nil {
 		return fmt.Errorf("write config: %w", err)
+	}
+	if err := saveVPSIPs(vpsIPs); err != nil {
+		m.log.Printf("warning: save vps_ips: %v", err)
 	}
 
 	// Level 1: hot reload via Clash API.
 	if err := m.reloadLocked(patched); err == nil {
+		m.updateVPSNftset(vpsIPs)
 		return nil
 	}
 
 	// Level 2: service restart.
-	if err := m.restartLocked(); err == nil {
-		return nil
-	}
-
-	return fmt.Errorf("apply: all reload strategies exhausted")
+	return m.restartLocked()
 }
 
 // Restart restarts sing-box via init.d. Thread-safe.
@@ -163,7 +170,6 @@ func (m *Manager) ListServers() ([]string, error) {
 	return info.All, nil
 }
 
-// proxyInfo queries Clash API for the selector state.
 func (m *Manager) proxyInfo() (*clashProxyResp, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
 	defer cancel()
@@ -278,7 +284,7 @@ func (m *Manager) ReapplyPatch() (bool, error) {
 		return false, fmt.Errorf("read config: %w", err)
 	}
 
-	patched, err := patchRouterConfig(data)
+	patched, vpsIPs, err := patchRouterConfig(data)
 	if err != nil {
 		return false, fmt.Errorf("patch: %w", err)
 	}
@@ -295,86 +301,229 @@ func (m *Manager) ReapplyPatch() (bool, error) {
 	if err := writeAtomic(m.configPath, patched); err != nil {
 		return false, fmt.Errorf("write: %w", err)
 	}
+	if err := saveVPSIPs(vpsIPs); err != nil {
+		m.log.Printf("warning: save vps_ips: %v", err)
+	}
 	return true, m.restartLocked()
 }
 
 // ── routing ───────────────────────────────────────────────────────────────────
 
-// SetupRouting configures kernel ip rules and table 2022 for VPN forwarding.
-// Must be called after every sing-box (re)start. Safe to call concurrently.
+// SetupRouting waits for the TPROXY port to be ready, then installs nftables
+// rules and ip rules for kernel-level transparent proxying.
 //
 // Routing scheme:
-//   - table 2022: default dev sing-tun  (all traffic → VPN)
-//   - ip rule prio 100:  fwmark 0x64 → main  (sing-box outbound bypasses VPN)
-//   - ip rule prio 2022: not fwmark 0x64 → table 2022  (LAN + router → VPN)
-//
-// When sing-box is down and table 2022 is empty, the kernel falls through to
-// the main table, giving fail-open internet access via the physical WAN.
+//   - nftables inet vpnbot/mangle_pre: br-lan traffic → TPROXY port 7893
+//   - nftables inet vpnbot/mangle_out: router own traffic → TPROXY (DPI protection)
+//   - ip rule prio 100: fwmark 0x1 → table 100 (TPROXY mark → loopback delivery)
+//   - ip rule prio 500: fwmark 0x64 → main (sing-box outbound bypasses TPROXY)
+//   - ip route table 100: local 0.0.0.0/0 dev lo (kernel delivers to tproxy socket)
 func (m *Manager) SetupRouting() error {
-	const (
-		tunIface    = "sing-tun"
-		table       = "2022"
-		prioBypass  = "100"
-		prioVPN     = "2022"
-		waitTimeout = 10 * time.Second
-	)
+	const waitTimeout = 15 * time.Second
 
+	// Wait for sing-box TPROXY port to be ready.
+	addr := fmt.Sprintf("127.0.0.1:%d", tproxyPort)
 	deadline := time.Now().Add(waitTimeout)
 	for {
-		if _, err := net.InterfaceByName(tunIface); err == nil {
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			conn.Close()
 			break
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not appear within %s", tunIface, waitTimeout)
+			return fmt.Errorf("tproxy port %d did not open within %s", tproxyPort, waitTimeout)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// BusyBox ip requires routing table names in /etc/iproute2/rt_tables.
-	// sing-box uses netlink directly, so it can write to table 2022 without this,
-	// but our ip(8) calls fail unless the table is named.
+	// Load kernel modules (non-fatal: may already be built-in or loaded by opkg).
+	exec.Command("modprobe", "nft_tproxy").Run()
+	exec.Command("modprobe", "nft_socket").Run()
+
+	vpsIPs := loadVPSIPs()
+
+	// Flush stale nftables table (idempotent).
+	exec.Command("nft", "delete", "table", "inet", nftTable).Run()
+
+	// Remove stale ip rules at our priorities (and old TUN-mode prio 2022).
+	for _, prio := range []string{"100", "500", "2022"} {
+		exec.Command("ip", "rule", "del", "priority", prio).Run()
+	}
+	exec.Command("ip", "route", "flush", "table", tproxyTable).Run()
+	exec.Command("ip", "route", "flush", "table", "2022").Run()
+
+	// BusyBox ip(8) requires routing table names in /etc/iproute2/rt_tables.
 	const rtTablesPath = "/etc/iproute2/rt_tables"
-	if data, err := os.ReadFile(rtTablesPath); err == nil && !bytes.Contains(data, []byte("2022")) {
-		if f, err := os.OpenFile(rtTablesPath, os.O_APPEND|os.O_WRONLY, 0644); err == nil {
-			fmt.Fprintf(f, "2022\tvpn\n")
-			f.Close()
+	if rtData, err := os.ReadFile(rtTablesPath); err == nil {
+		if !bytes.Contains(rtData, []byte(tproxyTable+"\t")) {
+			if f, err := os.OpenFile(rtTablesPath, os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+				fmt.Fprintf(f, "%s\ttproxy\n", tproxyTable)
+				f.Close()
+			}
 		}
 	}
 
-	// Flush stale routes, then add fresh default via sing-tun.
-	exec.Command("ip", "route", "flush", "table", table).Run()
+	// Loopback route: TPROXY-marked packets are delivered to the local tproxy socket.
 	if out, err := exec.Command(
-		"ip", "route", "add", "default", "dev", tunIface, "table", table,
+		"ip", "route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", tproxyTable,
 	).CombinedOutput(); err != nil {
-		return fmt.Errorf("add default via %s table %s: %w — %s", tunIface, table, err, out)
+		return fmt.Errorf("ip route add local dev lo table %s: %w — %s", tproxyTable, err, out)
 	}
 
-	// Delete stale rules at our priorities, then re-add.
-	exec.Command("ip", "rule", "del", "priority", prioBypass).Run()
-	exec.Command("ip", "rule", "del", "priority", prioVPN).Run()
-	exec.Command("ip", "rule", "add", "fwmark", "0x64", "priority", prioBypass, "table", "main").Run()
-	exec.Command("ip", "rule", "add", "not", "fwmark", "0x64", "priority", prioVPN, "table", table).Run()
+	exec.Command("ip", "rule", "add", "fwmark", tproxyFwmark, "priority", "100", "lookup", tproxyTable).Run()
+	exec.Command("ip", "rule", "add", "fwmark", bypassFwmark, "priority", "500", "lookup", "main").Run()
 
-	m.log.Printf("routing: table %s default via %s, rules prio %s/%s ready",
-		table, tunIface, prioBypass, prioVPN)
+	// Apply nftables table atomically via a single nft -f - call.
+	script := buildNFTScript(vpsIPs)
+	nftCmd := exec.Command("nft", "-f", "-")
+	nftCmd.Stdin = strings.NewReader(script)
+	if out, err := nftCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("nft apply: %w — %s", err, out)
+	}
+
+	m.log.Printf("routing: TPROXY :%d ready, inet %s installed, vps_ips=%d",
+		tproxyPort, nftTable, len(vpsIPs))
 	return nil
+}
+
+// ── nftables ──────────────────────────────────────────────────────────────────
+
+// buildNFTScript returns a complete nftables table definition for TPROXY.
+//
+// Three chains:
+//   - MANGLE: inner chain; skips RFC1918, VPS IPs, ct reply; TPROXY TCP+UDP
+//   - mangle_pre: prerouting hook -150; routes br-lan ingress into MANGLE
+//   - mangle_out: output hook -150 (type route); marks router-own traffic
+func buildNFTScript(vpsIPs []string) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
+
+	// RFC1918 + non-routable ranges — never TPROXY these.
+	b.WriteString("\tset vpnbot_lan {\n")
+	b.WriteString("\t\ttype ipv4_addr\n")
+	b.WriteString("\t\tflags interval\n")
+	b.WriteString("\t\telements = {\n")
+	b.WriteString("\t\t\t0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,\n")
+	b.WriteString("\t\t\t169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16,\n")
+	b.WriteString("\t\t\t224.0.0.0/4, 240.0.0.0/4\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n")
+
+	// VPN server IPs — bypass TPROXY to prevent routing loops.
+	b.WriteString("\tset vpnbot_vps {\n")
+	b.WriteString("\t\ttype ipv4_addr\n")
+	b.WriteString("\t\tflags interval\n")
+	if len(vpsIPs) > 0 {
+		b.WriteString("\t\telements = { ")
+		b.WriteString(strings.Join(vpsIPs, ", "))
+		b.WriteString(" }\n")
+	}
+	b.WriteString("\t}\n")
+
+	// Inner chain: TPROXY action for LAN-forwarded and router-own traffic.
+	b.WriteString("\tchain MANGLE {\n")
+	b.WriteString("\t\tip daddr @vpnbot_lan return\n")
+	b.WriteString("\t\tip daddr @vpnbot_vps return\n")
+	b.WriteString("\t\tct direction reply return\n")
+	fmt.Fprintf(&b, "\t\tip protocol tcp meta mark set %s tproxy ip to :%d accept\n", tproxyFwmark, tproxyPort)
+	fmt.Fprintf(&b, "\t\tip protocol udp meta mark set %s tproxy ip to :%d accept\n", tproxyFwmark, tproxyPort)
+	b.WriteString("\t}\n")
+
+	// Hook: intercept LAN-forwarded traffic (br-lan ingress).
+	// br-lan is the standard OpenWrt LAN bridge interface name.
+	b.WriteString("\tchain mangle_pre {\n")
+	b.WriteString("\t\ttype filter hook prerouting priority -150; policy accept;\n")
+	b.WriteString("\t\tiifname \"br-lan\" jump MANGLE\n")
+	b.WriteString("\t}\n")
+
+	// Hook: intercept router's own outbound traffic (vpnd heartbeat DPI protection).
+	// type route enables kernel re-routing when fwmark changes.
+	b.WriteString("\tchain mangle_out {\n")
+	b.WriteString("\t\ttype route hook output priority -150; policy accept;\n")
+	b.WriteString("\t\toif \"lo\" return\n")
+	fmt.Fprintf(&b, "\t\tmeta mark %s return\n", bypassFwmark)
+	b.WriteString("\t\tip daddr @vpnbot_lan return\n")
+	b.WriteString("\t\tip daddr @vpnbot_vps return\n")
+	fmt.Fprintf(&b, "\t\tmeta l4proto { tcp, udp } meta mark set %s\n", tproxyFwmark)
+	b.WriteString("\t}\n")
+
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// updateVPSNftset replaces vpnbot_vps elements without a full routing restart.
+// Called after successful hot reload when VPS IPs may have changed.
+func (m *Manager) updateVPSNftset(vpsIPs []string) {
+	exec.Command("nft", "flush", "set", "inet", nftTable, "vpnbot_vps").Run()
+	if len(vpsIPs) > 0 {
+		exec.Command("nft", "add", "element", "inet", nftTable, "vpnbot_vps",
+			"{ "+strings.Join(vpsIPs, ", ")+" }").Run()
+	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+func saveVPSIPs(ips []string) error {
+	if err := os.MkdirAll(filepath.Dir(vpsIPsPath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(vpsIPsPath, []byte(strings.Join(ips, "\n")), 0600)
+}
+
+func loadVPSIPs() []string {
+	data, err := os.ReadFile(vpsIPsPath)
+	if err != nil {
+		return nil
+	}
+	var ips []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			ips = append(ips, line)
+		}
+	}
+	return ips
+}
+
+// isPrivateCIDR returns true for RFC1918 and other non-routable IP ranges.
+// Used to filter route_exclude_address: only public IPs are VPS server addresses.
+func isPrivateCIDR(s string) bool {
+	var ip net.IP
+	if strings.Contains(s, "/") {
+		ip, _, _ = net.ParseCIDR(s)
+	} else {
+		ip = net.ParseIP(s)
+	}
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+	} {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network != nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // patchRouterConfig applies all router-specific patches to the sing-box config:
-// - Injects Clash API (external_controller)
-// - Sets TUN stack to gvisor (mixed/system stack requires TPROXY nftables rules
-//   that sing-box does not add under fw4/OpenWrt 24+; gvisor is full userspace TCP/IP)
-// - Sets route.default_mark=100 so all sing-box outbound sockets bypass the TUN
-//   routing table (prevents routing loop: VPN server IPs are in table 2022 via sing-tun)
-func patchRouterConfig(data []byte) ([]byte, error) {
+//   - Injects Clash API (external_controller at 127.0.0.1:9090)
+//   - Replaces TUN inbound with TPROXY inbound (port 7893, UDP timeout 5m)
+//   - Preserves route.default_mark=100 so sing-box outbound bypasses TPROXY
+//   - Disables interrupt_exist_connections on selector/urltest outbounds
+//
+// Returns the patched JSON and VPS IPs from the original TUN route_exclude_address.
+// These IPs populate the vpnbot_vps nftset to prevent routing loops.
+func patchRouterConfig(data []byte) ([]byte, []string, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("invalid JSON: %w", err)
+		return nil, nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	// Clash API
+	// Clash API.
 	exp, _ := cfg["experimental"].(map[string]any)
 	if exp == nil {
 		exp = map[string]any{}
@@ -387,26 +536,7 @@ func patchRouterConfig(data []byte) ([]byte, error) {
 	}
 	cfg["experimental"] = exp
 
-	// TUN inbound: force gvisor stack; disable auto_route.
-	// auto_route is disabled because we manage kernel routing explicitly —
-	// OpenWrt's fw4 resets routing tables on interface events, making
-	// sing-box's auto-created table 2022 unreliable. SetupRouting() handles it.
-	if inbounds, ok := cfg["inbounds"].([]any); ok {
-		for _, ib := range inbounds {
-			ibMap, ok := ib.(map[string]any)
-			if !ok {
-				continue
-			}
-			if ibMap["type"] == "tun" {
-				ibMap["auto_route"] = false
-				if _, exists := ibMap["stack"]; !exists {
-					ibMap["stack"] = "gvisor"
-				}
-			}
-		}
-	}
-
-	// route.default_mark: 100
+	// route.default_mark=100 (0x64): all sing-box outbound sockets bypass TPROXY.
 	route, _ := cfg["route"].(map[string]any)
 	if route == nil {
 		route = map[string]any{}
@@ -414,9 +544,30 @@ func patchRouterConfig(data []byte) ([]byte, error) {
 	route["default_mark"] = 100
 	cfg["route"] = route
 
-	// interrupt_exist_connections: false on all outbounds.
-	// Marzban sets this to true on selector/urltest, which drops ALL active
-	// connections on the router when switching servers — kills every LAN client.
+	// Replace TUN inbound with TPROXY inbound; extract VPS IPs before replacing.
+	var vpsIPs []string
+	if inbounds, ok := cfg["inbounds"].([]any); ok {
+		patched := make([]any, 0, len(inbounds))
+		for _, ib := range inbounds {
+			ibMap, ok := ib.(map[string]any)
+			if !ok || ibMap["type"] != "tun" {
+				patched = append(patched, ib)
+				continue
+			}
+			vpsIPs = extractVPSIPs(ibMap)
+			patched = append(patched, map[string]any{
+				"type":        "tproxy",
+				"tag":         "tproxy-in",
+				"listen":      "::",
+				"listen_port": tproxyPort,
+				"udp_timeout": "5m",
+			})
+		}
+		cfg["inbounds"] = patched
+	}
+
+	// interrupt_exist_connections: false — prevents killing all LAN clients
+	// when switching VPN servers via Clash API selector.
 	if outbounds, ok := cfg["outbounds"].([]any); ok {
 		for _, ob := range outbounds {
 			obMap, ok := ob.(map[string]any)
@@ -430,7 +581,33 @@ func patchRouterConfig(data []byte) ([]byte, error) {
 		}
 	}
 
-	return json.MarshalIndent(cfg, "", "  ")
+	patched, err := json.MarshalIndent(cfg, "", "  ")
+	return patched, vpsIPs, err
+}
+
+// extractVPSIPs reads route_exclude_address from a TUN inbound config and
+// returns the non-private CIDRs. These are VPN server IPs that must bypass
+// TPROXY to prevent routing loops.
+func extractVPSIPs(tunInbound map[string]any) []string {
+	excludeRaw, ok := tunInbound["route_exclude_address"]
+	if !ok {
+		return nil
+	}
+	excludeList, ok := excludeRaw.([]any)
+	if !ok {
+		return nil
+	}
+	var ips []string
+	for _, v := range excludeList {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			continue
+		}
+		if !isPrivateCIDR(s) {
+			ips = append(ips, s)
+		}
+	}
+	return ips
 }
 
 func writeAtomic(path string, data []byte) error {
