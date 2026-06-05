@@ -40,6 +40,10 @@ jobs:
               - 'files/vpn.lua'
               - 'files/index.htm'
               - 'patch-ipk.sh'
+              - 'files/keenetic-install.sh'
+              - 'files/S99vpnd'
+              - 'files/sing-box-init'
+              - 'files/vpn-connect-keenetic.sh'
             go_source:
               - 'cmd/**'
               - 'internal/**'
@@ -63,7 +67,8 @@ jobs:
             files/vpn-connect-keenetic.sh \
             files/S99vpnd \
             files/sing-box-init \
-            files/ndm-vpnd.sh
+            files/ndm-vpnd.sh \
+            files/keenetic-install.sh
 
   # ── Go: тесты + vet ────────────────────────────────────────────────────────
   test-go:

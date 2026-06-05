@@ -43,6 +43,13 @@ for BPFILE in bypass_ips.txt bypass_domains.txt; do
     chmod 644 "$WEB/router/${BPFILE}.sha256"
 done
 
+# Keenetic one-command installer and scripts
+mkdir -p "$WEB/router/keenetic"
+install -m 755 "$SCRIPT_DIR/keenetic-install.sh"     "$WEB/router/keenetic-install.sh"
+install -m 755 "$SCRIPT_DIR/S99vpnd"                  "$WEB/router/keenetic/S99vpnd"
+install -m 755 "$SCRIPT_DIR/sing-box-init"             "$WEB/router/keenetic/sing-box-init"
+install -m 755 "$SCRIPT_DIR/vpn-connect-keenetic.sh"  "$WEB/router/keenetic/vpn-connect.sh"
+
 echo "  OK"
 
 # ═══ 3. IPK ═══
