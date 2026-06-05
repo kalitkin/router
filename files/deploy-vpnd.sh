@@ -42,6 +42,9 @@ install_bin mips-softfloat    mips_74kc
 install_bin mipsle-softfloat  mipsel_24kc
 install_bin mipsle-softfloat  mipsel_24kec
 install_bin mipsle-softfloat  mipsel_74kc
+# Keenetic Entware (NC-1913 и аналогичные)
+install_bin mipsle-softfloat  mipsle
+install_bin mipsle-softfloat  mipsle-softfloat
 
 # ── ARM ──────────────────────────────────────────────────────────────────────
 install_bin armv5             arm_xscale

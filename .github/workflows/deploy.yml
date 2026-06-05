@@ -59,7 +59,11 @@ jobs:
             files/vpn-connect.sh \
             files/vpn-bootstrap.sh \
             files/deploy.sh \
-            files/deploy-vpnd.sh
+            files/deploy-vpnd.sh \
+            files/vpn-connect-keenetic.sh \
+            files/S99vpnd \
+            files/sing-box-init \
+            files/ndm-vpnd.sh
 
   # ── Go: тесты + vet ────────────────────────────────────────────────────────
   test-go:
