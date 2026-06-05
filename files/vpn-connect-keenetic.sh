@@ -61,6 +61,9 @@ chmod 600 "$VPN_DIR/token" "$VPN_DIR/device_id" "$VPN_DIR/mac"
 echo "Registered: device_id=$DEVICE_ID"
 
 if [ -n "$CONFIG_URL" ]; then
+    # Save sub URL so vpnd's periodic reconcile can refresh config independently.
+    echo "$CONFIG_URL" > "$VPN_DIR/config"
+
     SINGBOX_URL="${CONFIG_URL}/sing-box"
     echo "Fetching sing-box config from $SINGBOX_URL..."
     curl -s "$SINGBOX_URL" -o "$SINGBOX_DIR/config.json"
