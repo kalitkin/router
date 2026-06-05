@@ -39,6 +39,7 @@ jobs:
               - 'files/sing-box.init'
               - 'files/vpn.lua'
               - 'files/index.htm'
+              - 'files/cgi-vpn'
               - 'patch-ipk.sh'
               - 'files/keenetic-install.sh'
               - 'files/S99vpnd'
@@ -68,7 +69,8 @@ jobs:
             files/S99vpnd \
             files/sing-box-init \
             files/ndm-vpnd.sh \
-            files/keenetic-install.sh
+            files/keenetic-install.sh \
+            files/cgi-vpn
 
   # ── Go: тесты + vet ────────────────────────────────────────────────────────
   test-go:

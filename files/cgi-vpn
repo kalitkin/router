@@ -1,0 +1,62 @@
+#!/bin/sh
+# /www/cgi-bin/cgi-vpn — CGI бэкенд для LuCI вкладки VPN
+
+json_ok() { printf 'Content-Type: application/json\r\n\r\n%s' "$1"; }
+json_err() { printf 'Content-Type: application/json\r\n\r\n{"ok":false,"error":"%s"}' "$1"; }
+
+ACTION=$(echo "$QUERY_STRING" | grep -o 'action=[^&]*' | cut -d= -f2)
+
+case "$ACTION" in
+    status)
+        REGISTERED=false
+        DEVICE_ID=""
+        VPND=false
+        SINGBOX=false
+
+        if [ -f /etc/vpn/token ] && [ -f /etc/vpn/device_id ]; then
+            REGISTERED=true
+            DEVICE_ID=$(cat /etc/vpn/device_id 2>/dev/null)
+        fi
+
+        pgrep -x vpnd > /dev/null 2>&1 && VPND=true
+        pgrep -x sing-box > /dev/null 2>&1 && SINGBOX=true
+
+        json_ok "{\"registered\":$REGISTERED,\"device_id\":\"$DEVICE_ID\",\"vpnd_running\":$VPND,\"singbox_running\":$SINGBOX}"
+        ;;
+
+    connect)
+        # Читаем POST body
+        if [ "$REQUEST_METHOD" = "POST" ]; then
+            read -r BODY
+        else
+            BODY="$QUERY_STRING"
+        fi
+
+        CODE=$(echo "$BODY" | grep -o 'code=[^&]*' | cut -d= -f2)
+
+        # Валидация: только 6 цифр
+        case "$CODE" in
+            [0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+            *)
+                json_err "Нужно ровно 6 цифр"
+                exit 0
+                ;;
+        esac
+
+        # Запускаем регистрацию (синхронно, ждём ответ)
+        RESULT=$(/usr/bin/vpn-connect.sh "$CODE" 2>/tmp/vpn-cgi.log)
+        RC=$?
+
+        if [ $RC -eq 0 ] && echo "$RESULT" | grep -q "^OK"; then
+            json_ok '{"ok":true}'
+        else
+            ERR=$(tail -1 /tmp/vpn-cgi.log 2>/dev/null | sed 's/.*ERROR: //' | sed 's/"/\\"/g')
+            [ -z "$ERR" ] && ERR="Ошибка регистрации"
+            json_err "$ERR"
+        fi
+        ;;
+
+    *)
+        json_err "Unknown action"
+        ;;
+esac

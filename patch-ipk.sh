@@ -2,6 +2,9 @@
 ###############################################################################
 # patch-ipk.sh — собирает IPK v1.3.0
 #
+# Изменения v1.3.0-r28:
+#   - Добавлен files/cgi-vpn → /www/cgi-bin/cgi-vpn (CGI бэкенд для UI)
+#
 # Изменения v1.3.0-r22:
 #   - vpn.lua: pgrep -x sing-box → pgrep sing-box (BusyBox -x сравнивает полный cmdline,
 #     не имя процесса → singbox_running=false → UI навсегда "VPN запускается…")
@@ -87,11 +90,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
-OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r22_all.ipk}"
+OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r28_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="27"
+PKG_RELEASE="28"
 
 CDN="https://self-music.online/packages/latest"
 
@@ -120,6 +123,9 @@ install -D -m 755 "$FILES_DIR/vpn-connect.sh"   "$TMPDIR/data/usr/bin/vpn-connec
 # LuCI — Lua контроллер + HTML шаблон (требует luci-lua-runtime)
 install -D -m 644 "$FILES_DIR/vpn.lua"   "$TMPDIR/data/usr/lib/lua/luci/controller/vpn.lua"
 install -D -m 644 "$FILES_DIR/index.htm" "$TMPDIR/data/usr/lib/lua/luci/view/vpn/index.htm"
+
+# CGI бэкенд (uhttpd /cgi-bin → /www/cgi-bin)
+install -D -m 755 "$FILES_DIR/cgi-vpn"   "$TMPDIR/data/www/cgi-bin/cgi-vpn"
 
 # Каталоги конфигов
 mkdir -p "$TMPDIR/data/etc/vpn" "$TMPDIR/data/etc/sing-box"

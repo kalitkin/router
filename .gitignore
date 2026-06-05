@@ -11,3 +11,10 @@ desktop.ini
 
 # Claude Code context (local only)
 CLAUDE.md
+
+# IDE
+.vscode/
+
+# Compiled binaries (built locally or downloaded from CDN)
+vpnd-*
+sing-box-*
