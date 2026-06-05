@@ -15,10 +15,10 @@ TPROXY_MARK=1
 TPROXY_TABLE=100
 
 load_tproxy_modules() {
-    insmod /lib/modules/$(uname -r)/nf_defrag_ipv4.ko 2>/dev/null
-    insmod /lib/modules/$(uname -r)/nf_defrag_ipv6.ko 2>/dev/null
-    insmod /lib/modules/$(uname -r)/xt_socket.ko 2>/dev/null
-    insmod /lib/modules/$(uname -r)/xt_TPROXY.ko 2>/dev/null
+    insmod /lib/modules/"$(uname -r)"/nf_defrag_ipv4.ko 2>/dev/null
+    insmod /lib/modules/"$(uname -r)"/nf_defrag_ipv6.ko 2>/dev/null
+    insmod /lib/modules/"$(uname -r)"/xt_socket.ko 2>/dev/null
+    insmod /lib/modules/"$(uname -r)"/xt_TPROXY.ko 2>/dev/null
 }
 
 setup_tproxy() {
