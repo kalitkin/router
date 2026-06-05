@@ -1,0 +1,46 @@
+#!/bin/sh
+# sing-box init script for Keenetic (Entware)
+# vpnd calls this as /opt/etc/init.d/sing-box restart
+
+SINGBOX=/tmp/sing-box
+SINGBOX_GZ=/opt/usr/share/sing-box.tar.gz
+CFG=/opt/etc/sing-box/config.json
+LOG=/tmp/vpnd.log
+
+prepare() {
+    if [ ! -x "$SINGBOX" ]; then
+        if [ -f "$SINGBOX_GZ" ]; then
+            cd /tmp && tar xzf "$SINGBOX_GZ" && \
+                mv /tmp/sing-box-*/sing-box /tmp/sing-box 2>/dev/null
+            chmod +x "$SINGBOX"
+        else
+            echo "$(date) ERROR: $SINGBOX_GZ not found" >> "$LOG"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+case "$1" in
+    start)
+        prepare || exit 1
+        if [ -f "$CFG" ]; then
+            "$SINGBOX" run -c "$CFG" >> "$LOG" 2>&1 &
+        fi
+        ;;
+    stop)
+        killall sing-box 2>/dev/null || true
+        ;;
+    restart)
+        killall sing-box 2>/dev/null || true
+        sleep 1
+        prepare || exit 1
+        if [ -f "$CFG" ]; then
+            "$SINGBOX" run -c "$CFG" >> "$LOG" 2>&1 &
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

@@ -28,24 +28,24 @@ type ServerPing struct {
 
 const (
 	clashAPIURL    = "http://127.0.0.1:9090"
-	configPath     = "/etc/sing-box/config.json"
 	backupSuffix   = ".bak"
 	restartTimeout = 15 * time.Second
 	apiTimeout     = 8 * time.Second
 	selectorTag    = "proxy" // outbound selector tag in Marzban-generated sing-box config
 
-	tproxyPort   = 7893          // sing-box TPROXY inbound port
-	tproxyFwmark = "0x1"         // fwmark set on packets to intercept
-	tproxyTable  = "100"         // routing table: local 0.0.0.0/0 dev lo
-	bypassFwmark = "0x64"        // sing-box outbound mark → bypasses TPROXY
-	nftTable     = "vpnbot"      // nftables table name
-	vpsIPsPath   = "/etc/vpn/vps_ips" // VPN server IPs extracted from config
+	tproxyPort   = 7893    // sing-box TPROXY inbound port
+	tproxyFwmark = "0x1"   // fwmark set on packets to intercept
+	tproxyTable  = "100"   // routing table: local 0.0.0.0/0 dev lo
+	bypassFwmark = "0x64"  // sing-box outbound mark → bypasses TPROXY
+	nftTable     = "vpnbot" // nftables table name
 )
 
 // Manager controls the sing-box process lifecycle.
 // All public methods are safe for concurrent use.
 type Manager struct {
 	configPath  string
+	vpsIPsPath  string
+	initScript  string
 	clashURL    string
 	httpClient  *http.Client
 	delayClient *http.Client // longer timeout for server delay/connectivity tests
@@ -53,9 +53,15 @@ type Manager struct {
 	log         *log.Logger
 }
 
-func NewManager() *Manager {
+// NewManager creates a Manager whose file paths are derived from baseDir.
+// On OpenWrt: baseDir="/etc/vpn" → config at /etc/sing-box/config.json, init at /etc/init.d/sing-box.
+// On Keenetic: baseDir="/opt/etc/vpn" → config at /opt/etc/sing-box/config.json, init at /opt/etc/init.d/sing-box.
+func NewManager(baseDir string) *Manager {
+	etcDir := filepath.Dir(baseDir)
 	return &Manager{
-		configPath:  configPath,
+		configPath:  filepath.Join(etcDir, "sing-box", "config.json"),
+		vpsIPsPath:  filepath.Join(baseDir, "vps_ips"),
+		initScript:  filepath.Join(etcDir, "init.d", "sing-box"),
 		clashURL:    clashAPIURL,
 		httpClient:  &http.Client{Timeout: apiTimeout},
 		delayClient: &http.Client{Timeout: 15 * time.Second},
@@ -86,7 +92,7 @@ func (m *Manager) Apply(data []byte) error {
 	if err := writeAtomic(m.configPath, patched); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
-	if err := saveVPSIPs(vpsIPs); err != nil {
+	if err := m.saveVPSIPs(vpsIPs); err != nil {
 		m.log.Printf("warning: save vps_ips: %v", err)
 	}
 
@@ -386,7 +392,7 @@ func (m *Manager) reloadLocked(configData []byte) error {
 }
 
 func (m *Manager) restartLocked() error {
-	cmd := exec.Command("/etc/init.d/sing-box", "restart")
+	cmd := exec.Command(m.initScript, "restart")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sing-box restart: %w — %s", err, out)
 	}
@@ -433,7 +439,7 @@ func (m *Manager) ReapplyPatch() (bool, error) {
 	if err := writeAtomic(m.configPath, patched); err != nil {
 		return false, fmt.Errorf("write: %w", err)
 	}
-	if err := saveVPSIPs(vpsIPs); err != nil {
+	if err := m.saveVPSIPs(vpsIPs); err != nil {
 		m.log.Printf("warning: save vps_ips: %v", err)
 	}
 	return true, m.restartLocked()
@@ -473,7 +479,7 @@ func (m *Manager) SetupRouting() error {
 	exec.Command("modprobe", "nft_tproxy").Run()
 	exec.Command("modprobe", "nft_socket").Run()
 
-	vpsIPs := loadVPSIPs()
+	vpsIPs := m.loadVPSIPs()
 
 	// Flush stale nftables table (idempotent).
 	exec.Command("nft", "delete", "table", "inet", nftTable).Run()
@@ -507,6 +513,13 @@ func (m *Manager) SetupRouting() error {
 	exec.Command("ip", "rule", "add", "fwmark", bypassFwmark, "priority", "500", "lookup", "main").Run()
 
 	// Apply nftables table atomically via a single nft -f - call.
+	// On platforms without nftables (e.g. Keenetic/Entware), skip gracefully —
+	// TPROXY iptables rules are expected to be set up by the platform init script.
+	if _, err := exec.LookPath("nft"); err != nil {
+		m.log.Printf("routing: nft not available, skipping nftables (iptables rules expected from init script)")
+		return nil
+	}
+
 	script := buildNFTScript(vpsIPs)
 	nftCmd := exec.Command("nft", "-f", "-")
 	nftCmd.Stdin = strings.NewReader(script)
@@ -599,15 +612,15 @@ func (m *Manager) updateVPSNftset(vpsIPs []string) {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func saveVPSIPs(ips []string) error {
-	if err := os.MkdirAll(filepath.Dir(vpsIPsPath), 0755); err != nil {
+func (m *Manager) saveVPSIPs(ips []string) error {
+	if err := os.MkdirAll(filepath.Dir(m.vpsIPsPath), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(vpsIPsPath, []byte(strings.Join(ips, "\n")), 0600)
+	return os.WriteFile(m.vpsIPsPath, []byte(strings.Join(ips, "\n")), 0600)
 }
 
-func loadVPSIPs() []string {
-	data, err := os.ReadFile(vpsIPsPath)
+func (m *Manager) loadVPSIPs() []string {
+	data, err := os.ReadFile(m.vpsIPsPath)
 	if err != nil {
 		return nil
 	}
@@ -668,6 +681,21 @@ func patchRouterConfig(data []byte) ([]byte, []string, error) {
 			"external_controller": "127.0.0.1:9090",
 			"secret":              "",
 		}
+	}
+	// cache_file must be at experimental level (not inside clash_api) since sing-box 1.8.
+	// Always set path to /tmp: writable on both OpenWrt and Keenetic (read-only /etc).
+	// Marzban configs include cache_file.enabled=true without a path, causing sing-box
+	// to attempt cache.db in its CWD which may be read-only.
+	cacheCfg, _ := exp["cache_file"].(map[string]any)
+	if cacheCfg == nil {
+		cacheCfg = map[string]any{"enabled": true}
+	}
+	cacheCfg["path"] = "/tmp/sing-box-cache.db"
+	exp["cache_file"] = cacheCfg
+	// Remove deprecated clash_api.cache_file if present (old Marzban configs).
+	if clashAPI, ok := exp["clash_api"].(map[string]any); ok {
+		delete(clashAPI, "cache_file")
+		delete(clashAPI, "store_rdrc")
 	}
 	cfg["experimental"] = exp
 

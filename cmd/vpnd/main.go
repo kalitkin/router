@@ -65,7 +65,7 @@ func readFile(dir, name string) (string, error) {
 }
 
 func detectMAC() string {
-	for _, iface := range []string{"br-lan", "eth0", "wan"} {
+	for _, iface := range []string{"br-lan", "br0", "Bridge0", "eth0", "wan"} {
 		data, err := os.ReadFile("/sys/class/net/" + iface + "/address")
 		if err != nil {
 			continue

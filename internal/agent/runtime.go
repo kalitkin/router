@@ -77,7 +77,7 @@ func New(cfg Config) *Agent {
 	return &Agent{
 		cfg:            cfg,
 		api:            api.NewClient(cfg.BaseURL, cfg.Token),
-		sb:             singbox.NewManager(),
+		sb:             singbox.NewManager(cfg.Dir),
 		log:            log.New(os.Stderr, "[vpnd] ", log.LstdFlags),
 		forceReconcile: make(chan struct{}, 1),
 		startedAt:      time.Now(),
@@ -141,7 +141,7 @@ func (a *Agent) noteRestart() {
 
 // localIP returns the first non-loopback IPv4 on known interfaces.
 func localIP() string {
-	for _, name := range []string{"br-lan", "eth0", "wan"} {
+	for _, name := range []string{"br-lan", "br0", "Bridge0", "eth0", "wan"} {
 		iface, err := net.InterfaceByName(name)
 		if err != nil {
 			continue

@@ -1,0 +1,115 @@
+#!/bin/sh
+# Entware init script for vpnd + sing-box on Keenetic
+# Place at /opt/etc/init.d/S99vpnd and chmod +x
+
+VPND=/opt/usr/bin/vpnd
+SINGBOX_GZ=/opt/usr/share/sing-box.tar.gz
+SINGBOX=/tmp/sing-box
+VPND_DIR=/opt/etc/vpn
+SINGBOX_CFG=/opt/etc/sing-box/config.json
+LOGFILE=/tmp/vpnd.log
+
+TPROXY_IFACE=br0
+TPROXY_PORT=7893
+TPROXY_MARK=1
+TPROXY_TABLE=100
+
+load_tproxy_modules() {
+    insmod /lib/modules/$(uname -r)/nf_defrag_ipv4.ko 2>/dev/null
+    insmod /lib/modules/$(uname -r)/nf_defrag_ipv6.ko 2>/dev/null
+    insmod /lib/modules/$(uname -r)/xt_socket.ko 2>/dev/null
+    insmod /lib/modules/$(uname -r)/xt_TPROXY.ko 2>/dev/null
+}
+
+setup_tproxy() {
+    ip rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
+    ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
+
+    iptables -t mangle -N VPNBOT_DIVERT 2>/dev/null || iptables -t mangle -F VPNBOT_DIVERT
+    iptables -t mangle -A VPNBOT_DIVERT -j MARK --set-mark $TPROXY_MARK
+    iptables -t mangle -A VPNBOT_DIVERT -j ACCEPT
+
+    # Skip already-marked (sing-box outbound) and private ranges
+    iptables -t mangle -N VPNBOT_PREROUTE 2>/dev/null || iptables -t mangle -F VPNBOT_PREROUTE
+    iptables -t mangle -A VPNBOT_PREROUTE -m mark --mark 0x64 -j RETURN
+    iptables -t mangle -A VPNBOT_PREROUTE -d 10.0.0.0/8 -j RETURN
+    iptables -t mangle -A VPNBOT_PREROUTE -d 172.16.0.0/12 -j RETURN
+    iptables -t mangle -A VPNBOT_PREROUTE -d 192.168.0.0/16 -j RETURN
+    iptables -t mangle -A VPNBOT_PREROUTE -d 127.0.0.0/8 -j RETURN
+    iptables -t mangle -A VPNBOT_PREROUTE -m socket -j VPNBOT_DIVERT
+    iptables -t mangle -A VPNBOT_PREROUTE -p tcp -j TPROXY \
+        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
+    iptables -t mangle -A VPNBOT_PREROUTE -p udp -j TPROXY \
+        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
+
+    iptables -t mangle -A PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE
+}
+
+teardown_tproxy() {
+    iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE 2>/dev/null || true
+    iptables -t mangle -F VPNBOT_PREROUTE 2>/dev/null || true
+    iptables -t mangle -X VPNBOT_PREROUTE 2>/dev/null || true
+    iptables -t mangle -F VPNBOT_DIVERT 2>/dev/null || true
+    iptables -t mangle -X VPNBOT_DIVERT 2>/dev/null || true
+    ip rule del fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
+    ip route del local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
+}
+
+prepare_singbox() {
+    if [ ! -x "$SINGBOX" ]; then
+        echo "$(date) Unpacking sing-box..." >> $LOGFILE
+        if [ -f "$SINGBOX_GZ" ]; then
+            cd /tmp && tar xzf "$SINGBOX_GZ" && \
+                mv /tmp/sing-box-*/sing-box /tmp/sing-box 2>/dev/null || \
+                mv /tmp/sing-box-* /tmp/sing-box 2>/dev/null
+            chmod +x $SINGBOX
+        else
+            echo "$(date) ERROR: $SINGBOX_GZ not found" >> $LOGFILE
+            return 1
+        fi
+    fi
+    return 0
+}
+
+start() {
+    echo "$(date) Starting vpnd..." >> $LOGFILE
+
+    teardown_tproxy  # clean up stale rules from previous run
+    mkdir -p $VPND_DIR /opt/etc/sing-box
+
+    load_tproxy_modules
+
+    if ! prepare_singbox; then
+        echo "$(date) Failed to prepare sing-box" >> $LOGFILE
+        return 1
+    fi
+
+    if [ -f "$SINGBOX_CFG" ]; then
+        $SINGBOX run -c $SINGBOX_CFG >> $LOGFILE 2>&1 &
+        echo "$(date) sing-box started (pid $!)" >> $LOGFILE
+    else
+        echo "$(date) No sing-box config yet — skipping sing-box start" >> $LOGFILE
+    fi
+
+    if [ -f "$VPND_DIR/token" ]; then
+        setup_tproxy
+        $VPND -dir $VPND_DIR >> $LOGFILE 2>&1 &
+        echo "$(date) vpnd started (pid $!)" >> $LOGFILE
+    else
+        echo "$(date) No token yet — run vpn-connect.sh to register" >> $LOGFILE
+    fi
+}
+
+stop() {
+    echo "$(date) Stopping vpnd..." >> $LOGFILE
+    teardown_tproxy
+    killall vpnd 2>/dev/null || true
+    killall sing-box 2>/dev/null || true
+}
+
+case "$1" in
+    start)  start ;;
+    stop)   stop ;;
+    restart) stop; sleep 1; start ;;
+    *)      echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
