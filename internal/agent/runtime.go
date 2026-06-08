@@ -50,12 +50,16 @@ type Agent struct {
 	safeModeUntil time.Time
 
 	// health state
-	l2FailCount int // consecutive Clash API failures
-	l3FailCount int // consecutive server reachability failures
+	l2FailCount   int
+	l3FailCount   int
+	// HEALTH-01: cached L3 connectivity result reported in heartbeat.
+	// nil = not yet tested (omitted from JSON payload).
+	lastConnectOK *bool
+	lastConnRTTMs int
 
 	// memwatch state
 	singboxStartedAt time.Time // updated after every sing-box restart
-	lastMemRestart   time.Time // cooldown: memwatch won't restart more often than memWatchCooldown
+	lastMemRestart   time.Time // cooldown: memwatch wont restart more often than memWatchCooldown
 
 	// command state
 	lastCmdID     string         // dedup: skip already-executed commands
@@ -92,9 +96,9 @@ func (a *Agent) Run() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	// configCh: heartbeat → reconcile (new sub_link)
+	// configCh: heartbeat -> reconcile (new sub_link)
 	configCh := make(chan string, 1)
-	// cmdCh: heartbeat → commandLoop (buffer 1: one command in-flight at a time,
+	// cmdCh: heartbeat -> commandLoop (buffer 1: one command in-flight at a time,
 	// matching the single Command field in HeartbeatResp)
 	cmdCh := make(chan *Command, 1)
 
