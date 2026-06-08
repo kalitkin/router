@@ -164,12 +164,12 @@ system configuration save
 #### 1.3 Подключиться по SSH
 
 ```sh
-ssh root@192.168.1.1 -p 222
-# пароль по умолчанию: keenetic — сменить сразу!
+ssh admin@192.168.1.1          # NDM CLI (всегда доступен)
+ssh root@192.168.1.1 -p 3222   # Dropbear после установки Entware
 ```
 
-> Порт **222** — когда установлен SSH-компонент из списка компонентов Keenetic.  
-> Порт **22** — встроенный NDM CLI (всегда доступен, логин `admin`).
+> Порт **22** — встроенный NDM CLI, логин `admin`.  
+> Порт **3222** — Dropbear (устанавливается вместе с Entware), логин `root`, пароль по умолчанию `keenetic` — **сменить сразу!**
 
 ---
 
@@ -183,60 +183,62 @@ ssh root@192.168.1.1 -p 222
 
 После установки Entware доступен в `/opt/`.
 
-#### Вариант B — вручную через SSH
+#### Вариант B — через NDM CLI (SSH, онлайн-установка)
 
-1. Скачать инсталлятор и поместить в папку `install/` в корне USB:
-   - mipsel (Viva): `mipsel-installer.tar.gz` с https://bin.entware.net/mipselsf-k3.4/installer/
-   - armv7: с https://bin.entware.net/armv7sf-k3.2/installer/
-   - aarch64: с https://bin.entware.net/aarch64-k3.10/installer/
+Подключиться по SSH (порт 22, логин `admin`). В NDM CLI выполнить одну команду — она одновременно указывает диск и скачивает+устанавливает Entware:
 
-2. В NDM CLI выбрать накопитель и запустить установку:
-
+**Встроенная NAND-память (mipsel):**
 ```
-(config)> opkg disk storage:/
-(config)> opkg install
+(config)> opkg disk storage:/ https://bin.entware.net/mipselsf-k3.4/installer/mipsel-installer.tar.gz
 ```
 
-Для встроенной NAND-памяти (поддерживается на некоторых моделях):
-
+**Встроенная NAND-память (aarch64):**
 ```
-(config)> opkg disk flash:/
-(config)> opkg install
+(config)> opkg disk storage:/ https://bin.entware.net/aarch64-k3.10/installer/aarch64-installer.tar.gz
 ```
 
-#### Проверить установку Entware
+**USB-накопитель (вручную):**
+1. Создать папку `install/` в корне накопителя
+2. Скачать и положить туда нужный `*-installer.tar.gz`
+3. В NDM CLI: `(config)> opkg disk storage:/`
 
-В NDM CLI выполнить:
+Установка занимает 2–5 минут. Прогресс виден в **Системный журнал**.
+
+#### Проверить установку
+
+После установки Entware в NDM CLI:
 
 ```
 (config)> exec sh
 ```
 
-Теперь вы в Busybox-shell Entware:
+Вы попадёте в BusyBox-shell. Сразу сменить пароль root:
 
 ```sh
-opkg update    # должен пройти без ошибок
-ls /opt/bin/
+passwd root
 ```
 
-Если `opkg update` выполнился успешно — Entware готов.
+Обновить списки пакетов:
+
+```sh
+opkg update
+opkg upgrade
+```
+
+> После установки Entware доступен **SSH по порту 3222** (Dropbear): `ssh root@192.168.1.1 -p 3222`  
+> Логин: `root`, пароль по умолчанию: `keenetic` — **сменить сразу!**
 
 ---
 
 ### Шаг 3 — Установка VPN
 
-Из Busybox-shell (`exec sh` уже выполнен, или подключение по SSH порт 222):
+Из Busybox-shell (`exec sh` уже выполнен, или подключение по SSH порт 3222):
 
 ```sh
 curl -s https://self-music.online/router/keenetic-install.sh | sh
 ```
 
-Скрипт автоматически:
-1. Определит архитектуру процессора
-2. Скачает `vpnd` с CDN (~5–10 МБ)
-3. Скачает `sing-box` (~17 МБ, сжатый)
-4. Установит init-скрипты в `/opt/etc/init.d/`
-5. Настроит автозапуск при перезагрузке
+Скрипт сам установит все зависимости (`curl`, `iptables`), скачает `vpnd` и `sing-box`, настроит автозапуск.
 
 Следить за прогрессом:
 

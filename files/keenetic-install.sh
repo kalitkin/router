@@ -41,7 +41,19 @@ if [ -z "$ARCH" ]; then
 fi
 log "Architecture: $ARCH"
 
-# ── 2. Directories ────────────────────────────────────────────────────────────
+# ── 2. Install required packages ──────────────────────────────────────────────
+
+install_pkg() {
+    if ! command -v "$2" > /dev/null 2>&1; then
+        log "Installing $1..."
+        opkg install "$1" > /dev/null 2>&1 || { log "ERROR: failed to install $1"; exit 1; }
+    fi
+}
+
+install_pkg curl     curl
+install_pkg iptables iptables
+
+# ── 3. Directories ────────────────────────────────────────────────────────────
 
 mkdir -p /opt/usr/bin /opt/usr/share
 mkdir -p /opt/etc/vpn /opt/etc/sing-box /opt/etc/init.d /opt/etc/ndm/fs.d
