@@ -43,6 +43,9 @@ setup_tproxy() {
         --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
 
     iptables -t mangle -A PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE
+
+    # MSS clamp — prevents packet drops with Hysteria2/QUIC tunnel overhead
+    iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 }
 
 teardown_tproxy() {
@@ -87,6 +90,8 @@ start() {
     if [ -f "$SINGBOX_CFG" ]; then
         $SINGBOX run -c $SINGBOX_CFG >> $LOGFILE 2>&1 &
         echo "$(date) sing-box started (pid $!)" >> $LOGFILE
+        # Trigger URLTest immediately so Best Latency selects a server without waiting for traffic
+        (sleep 8 && curl -sf 'http://127.0.0.1:9090/proxies/Best%20Latency/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=8000' >> $LOGFILE 2>&1) &
     else
         echo "$(date) No sing-box config yet — skipping sing-box start" >> $LOGFILE
     fi
