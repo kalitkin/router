@@ -164,12 +164,10 @@ system configuration save
 #### 1.3 Подключиться по SSH
 
 ```sh
-ssh admin@192.168.1.1          # NDM CLI (всегда доступен)
-ssh root@192.168.1.1 -p 3222   # Dropbear после установки Entware
+ssh admin@192.168.1.1
 ```
 
-> Порт **22** — встроенный NDM CLI, логин `admin`.  
-> Порт **3222** — Dropbear (устанавливается вместе с Entware), логин `root`, пароль по умолчанию `keenetic` — **сменить сразу!**
+Порт 22, логин `admin`. Попадёте в NDM CLI — выполните `exec sh` чтобы войти в BusyBox-shell.
 
 ---
 
@@ -225,14 +223,11 @@ opkg update
 opkg upgrade
 ```
 
-> После установки Entware доступен **SSH по порту 3222** (Dropbear): `ssh root@192.168.1.1 -p 3222`  
-> Логин: `root`, пароль по умолчанию: `keenetic` — **сменить сразу!**
-
 ---
 
 ### Шаг 3 — Установка VPN
 
-Из Busybox-shell (`exec sh` уже выполнен, или подключение по SSH порт 3222):
+Из BusyBox-shell (`exec sh` уже выполнен):
 
 ```sh
 opkg install curl
