@@ -22,6 +22,7 @@ load_tproxy_modules() {
 }
 
 setup_tproxy() {
+    # IPv4
     ip rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
     ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
 
@@ -46,9 +47,30 @@ setup_tproxy() {
 
     # MSS clamp — prevents packet drops with Hysteria2/QUIC tunnel overhead
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+
+    # IPv6 — intercept IPv6 traffic from LAN devices (sing-box listens on :::7893)
+    ip -6 rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
+    ip -6 route add local ::/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
+
+    ip6tables -t mangle -N VPNBOT_DIVERT6 2>/dev/null || ip6tables -t mangle -F VPNBOT_DIVERT6
+    ip6tables -t mangle -A VPNBOT_DIVERT6 -j MARK --set-mark $TPROXY_MARK
+    ip6tables -t mangle -A VPNBOT_DIVERT6 -j ACCEPT
+
+    ip6tables -t mangle -N VPNBOT_PREROUTE6 2>/dev/null || ip6tables -t mangle -F VPNBOT_PREROUTE6
+    ip6tables -t mangle -A VPNBOT_PREROUTE6 -m mark --mark 0x64 -j RETURN
+    ip6tables -t mangle -A VPNBOT_PREROUTE6 -d fc00::/7 -j RETURN
+    ip6tables -t mangle -A VPNBOT_PREROUTE6 -d ::1/128 -j RETURN
+    ip6tables -t mangle -A VPNBOT_PREROUTE6 -m socket -j VPNBOT_DIVERT6
+    ip6tables -t mangle -A VPNBOT_PREROUTE6 -p tcp -j TPROXY \
+        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
+    ip6tables -t mangle -A VPNBOT_PREROUTE6 -p udp -j TPROXY \
+        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
+
+    ip6tables -t mangle -A PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE6
 }
 
 teardown_tproxy() {
+    # IPv4
     iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE 2>/dev/null || true
     iptables -t mangle -F VPNBOT_PREROUTE 2>/dev/null || true
     iptables -t mangle -X VPNBOT_PREROUTE 2>/dev/null || true
@@ -56,6 +78,15 @@ teardown_tproxy() {
     iptables -t mangle -X VPNBOT_DIVERT 2>/dev/null || true
     ip rule del fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
     ip route del local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
+
+    # IPv6
+    ip6tables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE6 2>/dev/null || true
+    ip6tables -t mangle -F VPNBOT_PREROUTE6 2>/dev/null || true
+    ip6tables -t mangle -X VPNBOT_PREROUTE6 2>/dev/null || true
+    ip6tables -t mangle -F VPNBOT_DIVERT6 2>/dev/null || true
+    ip6tables -t mangle -X VPNBOT_DIVERT6 2>/dev/null || true
+    ip -6 rule del fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
+    ip -6 route del local ::/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
 }
 
 prepare_singbox() {
