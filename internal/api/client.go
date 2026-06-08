@@ -49,14 +49,18 @@ type ServerInfo struct {
 }
 
 type HeartbeatReq struct {
-	IP               string       `json:"ip,omitempty"`
-	FirmwareVersion  string       `json:"firmware_version,omitempty"`
-	CurrentServer    string       `json:"current_server,omitempty"`
-	AvailableServers []ServerInfo `json:"available_servers,omitempty"`
+	IP               string         `json:"ip,omitempty"`
+	FirmwareVersion  string         `json:"firmware_version,omitempty"`
+	CurrentServer    string         `json:"current_server,omitempty"`
+	AvailableServers []ServerInfo   `json:"available_servers,omitempty"`
 	CommandResult    *CommandResult `json:"command_result,omitempty"`
 	SingboxRSSKB     int64          `json:"singbox_rss_kb,omitempty"`
 	ConntrackCount   int            `json:"conntrack_count,omitempty"`
 	UptimeSec        int64          `json:"uptime_sec,omitempty"`
+	// HEALTH-01: real connectivity signal from L3 health check.
+	// nil = not yet tested (omitted from JSON); false = tested and failed.
+	ConnectOK *bool `json:"connect_ok,omitempty"`
+	ConnRTTMs int   `json:"conn_rtt_ms,omitempty"`
 }
 
 // CommandResult mirrors agent.CommandResult but lives here to avoid import cycle.
