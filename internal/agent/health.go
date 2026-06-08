@@ -80,13 +80,27 @@ func (a *Agent) checkHealth() {
 // checkL3Health tests whether the currently selected VPN server can reach the
 // internet. On two consecutive failures it searches for a working server and
 // switches automatically — providing fallback when the user picks a dead server.
+// The result is also cached in lastConnectOK/lastConnRTTMs for HEALTH-01 heartbeat reporting.
 func (a *Agent) checkL3Health() {
 	current, err := a.sb.CurrentServer()
 	if err != nil || current == "" {
 		return
 	}
 
-	if _, err := a.sb.TestServerDelay(current); err != nil {
+	delay, err := a.sb.TestServerDelay(current)
+
+	// HEALTH-01: cache connectivity result for heartbeat health signal.
+	{
+		ok := err == nil
+		a.mu.Lock()
+		a.lastConnectOK = &ok
+		if ok && delay > 0 {
+			a.lastConnRTTMs = delay
+		}
+		a.mu.Unlock()
+	}
+
+	if err != nil {
 		a.mu.Lock()
 		a.l3FailCount++
 		count := a.l3FailCount
