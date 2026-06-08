@@ -78,6 +78,8 @@ func (a *Agent) doHeartbeat(
 	availableServers := a.lastPings
 	cmdResult := a.lastCmdResult
 	a.lastCmdResult = nil // clear — will be sent this heartbeat
+	connectOK := a.lastConnectOK  // HEALTH-01: nil until first L3 test
+	connRTTMs := a.lastConnRTTMs  // HEALTH-01: latest RTT from L3 test
 	a.mu.Unlock()
 
 	req := api.HeartbeatReq{
@@ -89,6 +91,8 @@ func (a *Agent) doHeartbeat(
 		SingboxRSSKB:     singboxRSSKB(),
 		ConntrackCount:   conntrackCount(),
 		UptimeSec:        int64(time.Since(a.startedAt).Seconds()),
+		ConnectOK:        connectOK,
+		ConnRTTMs:        connRTTMs,
 	}
 
 	resp, err := a.api.Heartbeat(ctx, req)
@@ -102,7 +106,7 @@ func (a *Agent) doHeartbeat(
 			*circuitOpenSince = time.Now()
 			a.log.Printf("heartbeat: circuit OPEN after %d failures", *consecutiveFails)
 		}
-		// Put result back — don't lose it on transient failure.
+		// Put result back — do not lose it on transient failure.
 		if cmdResult != nil {
 			a.mu.Lock()
 			if a.lastCmdResult == nil {
@@ -127,8 +131,8 @@ func (a *Agent) doHeartbeat(
 		return
 	}
 
-	// New config from server → signal reconcile only when URL changed.
-	// Same URL means server hasn't rotated the subscription — skip the HTTP
+	// New config from server -> signal reconcile only when URL changed.
+	// Same URL means server has not rotated the subscription — skip the HTTP
 	// fetch. The 5-min reconcile ticker still catches any content changes.
 	if resp.Config != "" {
 		a.mu.Lock()
@@ -146,7 +150,7 @@ func (a *Agent) doHeartbeat(
 		}
 	}
 
-	// Incoming command → dispatch to commandLoop (dedup by ID).
+	// Incoming command -> dispatch to commandLoop (dedup by ID).
 	// lastCmdID is written only after successful enqueue so that a full channel
 	// does not permanently suppress the command on the next heartbeat.
 	if resp.Command != nil {
@@ -210,7 +214,7 @@ func conntrackCount() int {
 	return n
 }
 
-// ── type converters (api ↔ agent) ─────────────────────────────────────────────
+// ── type converters (api <-> agent) ─────────────────────────────────────────────
 
 func toAPIResult(r *CommandResult) *api.CommandResult {
 	if r == nil {
