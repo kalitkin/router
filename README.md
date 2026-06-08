@@ -230,11 +230,10 @@ opkg upgrade
 Из BusyBox-shell (`exec sh` уже выполнен):
 
 ```sh
-opkg install curl
-curl -s https://self-music.online/router/keenetic-install.sh | sh
+opkg update && opkg install curl && curl -s https://self-music.online/router/keenetic-install.sh | sh
 ```
 
-`curl` нужен чтобы скачать установщик — в базовом Entware его нет. Скрипт дальше сам установит все остальные зависимости (`iptables`), скачает `vpnd` и `sing-box`, настроит автозапуск.
+`curl` нужен чтобы скачать установщик — в базовом Entware его нет, сначала обновляем списки пакетов (`opkg update`). Скрипт дальше сам установит `iptables`, скачает `vpnd` и `sing-box`, настроит автозапуск.
 
 Следить за прогрессом:
 
@@ -297,8 +296,7 @@ rm -f /opt/etc/vpn/token /opt/etc/vpn/config /opt/etc/vpn/applied_hash
 rm -f /opt/etc/sing-box/config.json
 rm -f /tmp/vpnd.log /tmp/vpn-keenetic-install.log
 
-opkg install curl
-curl -s https://self-music.online/router/keenetic-install.sh | sh
+opkg update && opkg install curl && curl -s https://self-music.online/router/keenetic-install.sh | sh
 /opt/etc/vpn-connect.sh 123456
 /opt/etc/init.d/S99vpnd start
 ```
