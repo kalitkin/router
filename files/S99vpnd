@@ -49,13 +49,17 @@ add_exclusions() {
 }
 
 setup_tproxy() {
-    # Mixed mode: TCP via NAT REDIRECT, UDP via TPROXY. The Keenetic kernel forbids
-    # TPROXY spoofed-source replies (sendto EPERM) so pure-TPROXY TCP never SYN-ACKs
-    # clients → phone hangs. REDIRECT uses NAT (no spoofed source) and works.
-    # IPv6 is NOT intercepted: the tunnel is IPv4-only, intercepting v6 black-holes it.
+    # TCP via NAT REDIRECT; QUIC (UDP/443) blocked to force a TCP fallback.
+    #
+    # The Keenetic kernel forbids TPROXY spoofed-source replies (sendto EPERM), so
+    # neither TCP nor UDP can be transparently proxied via TPROXY. REDIRECT (NAT) has
+    # no spoofed source and works for TCP. UDP has no NAT-REDIRECT equivalent for
+    # transparent proxying, so QUIC can't be tunneled — instead we REJECT UDP/443 so
+    # browsers/apps (YouTube, Instagram) instantly fall back to HTTP/2 over TCP, which
+    # IS tunneled. IPv6 is not intercepted (tunnel is IPv4-only).
 
-    # Disable Keenetic software fast-path so the first packets reach netfilter and
-    # establish the NAT/TPROXY state instead of being offloaded around it.
+    # Disable Keenetic software fast-path so first packets reach netfilter and
+    # establish NAT state instead of being offloaded around it.
     echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null || true
     echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null || true
     conntrack -F 2>/dev/null || true
@@ -72,28 +76,19 @@ setup_tproxy() {
     iptables -t nat -A VPNBOT_REDIR -p tcp -j REDIRECT --to-ports $REDIR_PORT
     iptables -t nat -A PREROUTING -i $TPROXY_IFACE -p tcp -j VPNBOT_REDIR
 
-    # ── UDP: TPROXY → tproxy-in (7893) ──────────────────────────────────────
-    ip rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
-    ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
+    # ── QUIC kill: REJECT UDP/443 so apps fall back to TCP (which is tunneled) ──
+    # icmp-port-unreachable triggers an immediate fallback (DROP would force a slow
+    # timeout). Skip LAN-to-LAN. Built as a chain so the netfilter.d hook restores it.
+    iptables -t filter -N VPNBOT_QUIC 2>/dev/null || iptables -t filter -F VPNBOT_QUIC
+    iptables -t filter -A VPNBOT_QUIC -d 10.0.0.0/8 -j RETURN
+    iptables -t filter -A VPNBOT_QUIC -d 172.16.0.0/12 -j RETURN
+    iptables -t filter -A VPNBOT_QUIC -d 192.168.0.0/16 -j RETURN
+    iptables -t filter -A VPNBOT_QUIC -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null \
+        || iptables -t filter -A VPNBOT_QUIC -p udp --dport 443 -j DROP
+    # Insert at the top of FORWARD so it precedes NDM's conntrack/ACCEPT rules.
+    iptables -t filter -I FORWARD 1 -i $TPROXY_IFACE -p udp --dport 443 -j VPNBOT_QUIC
 
-    iptables -t mangle -N VPNBOT_DIVERT 2>/dev/null || iptables -t mangle -F VPNBOT_DIVERT
-    iptables -t mangle -A VPNBOT_DIVERT -j MARK --set-mark $TPROXY_MARK
-    iptables -t mangle -A VPNBOT_DIVERT -j ACCEPT
-
-    iptables -t mangle -N VPNBOT_PREROUTE 2>/dev/null || iptables -t mangle -F VPNBOT_PREROUTE
-    iptables -t mangle -A VPNBOT_PREROUTE -m mark --mark 0x64 -j RETURN
-    iptables -t mangle -A VPNBOT_PREROUTE -d 10.0.0.0/8 -j RETURN
-    iptables -t mangle -A VPNBOT_PREROUTE -d 172.16.0.0/12 -j RETURN
-    iptables -t mangle -A VPNBOT_PREROUTE -d 192.168.0.0/16 -j RETURN
-    iptables -t mangle -A VPNBOT_PREROUTE -d 127.0.0.0/8 -j RETURN
-    add_exclusions iptables mangle VPNBOT_PREROUTE
-    iptables -t mangle -A VPNBOT_PREROUTE -m socket -j VPNBOT_DIVERT
-    iptables -t mangle -A VPNBOT_PREROUTE -p udp -j TPROXY \
-        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
-
-    iptables -t mangle -A PREROUTING -i $TPROXY_IFACE -p udp -j VPNBOT_PREROUTE
-
-    # MSS clamp — prevents packet drops with Hysteria2/QUIC tunnel overhead
+    # MSS clamp — prevents packet drops with Hysteria2 tunnel overhead
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 }
 
@@ -106,7 +101,12 @@ teardown_tproxy() {
     iptables -t nat -F VPNBOT_REDIR 2>/dev/null || true
     iptables -t nat -X VPNBOT_REDIR 2>/dev/null || true
 
-    # UDP TPROXY (mangle)
+    # QUIC kill (filter)
+    iptables -t filter -D FORWARD -i $TPROXY_IFACE -p udp --dport 443 -j VPNBOT_QUIC 2>/dev/null || true
+    iptables -t filter -F VPNBOT_QUIC 2>/dev/null || true
+    iptables -t filter -X VPNBOT_QUIC 2>/dev/null || true
+
+    # Legacy UDP TPROXY (mangle) — no longer created, clean up if present
     iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -p udp -j VPNBOT_PREROUTE 2>/dev/null || true
     # Legacy: older versions hooked the chain without -p udp; remove that too.
     iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE 2>/dev/null || true
