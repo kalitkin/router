@@ -14,6 +14,13 @@ TPROXY_PORT=7893
 TPROXY_MARK=1
 TPROXY_TABLE=100
 
+# Traffic exclusions — never tunneled. Prevents two classes of failure:
+#   1. Admin lockout: tunneling SSH/Telnet can cut remote access mid-change.
+#   2. VPN-in-VPN: a LAN host running its own VPN (WireGuard/WARP) breaks when
+#      its encrypted UDP gets re-tunneled; its kill-switch then blocks the host.
+EXCLUDE_PORTS="22 23"                      # admin ports (SSH, Telnet)
+EXCLUDE_IPS_FILE=/opt/etc/vpn/exclude_ips  # one LAN IPv4 per line -> bypasses tunnel
+
 load_tproxy_modules() {
     insmod /lib/modules/"$(uname -r)"/nf_defrag_ipv4.ko 2>/dev/null
     insmod /lib/modules/"$(uname -r)"/nf_defrag_ipv6.ko 2>/dev/null
@@ -21,7 +28,32 @@ load_tproxy_modules() {
     insmod /lib/modules/"$(uname -r)"/xt_TPROXY.ko 2>/dev/null
 }
 
+# Append RETURN rules so excluded traffic skips TPROXY entirely.
+# Must run BEFORE the -m socket / TPROXY rules in the chain.
+#   $1 = iptables binary (iptables | ip6tables)
+#   $2 = chain name (VPNBOT_PREROUTE | VPNBOT_PREROUTE6)
+add_exclusions() {
+    _ipt="$1"; _chain="$2"
+    for _p in $EXCLUDE_PORTS; do
+        $_ipt -t mangle -A "$_chain" -p tcp --dport "$_p" -j RETURN 2>/dev/null || true
+    done
+    # Per-device IP excludes are IPv4-only (WARP/secondary-VPN hosts).
+    if [ "$_ipt" = "iptables" ] && [ -f "$EXCLUDE_IPS_FILE" ]; then
+        while IFS= read -r _ip; do
+            case "$_ip" in ''|\#*) continue ;; esac
+            iptables -t mangle -A "$_chain" -s "$_ip" -j RETURN 2>/dev/null || true
+        done < "$EXCLUDE_IPS_FILE"
+    fi
+}
+
 setup_tproxy() {
+    # Disable Keenetic software fast-path so TPROXY intercepts all flows.
+    # Without this, FASTNAT "learns" a flow after first packets and offloads it
+    # around iptables — traffic bypasses the tunnel, provider blocks QUIC → hang.
+    echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null || true
+    echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null || true
+    conntrack -F 2>/dev/null || true
+
     # IPv4
     ip rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
     ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
@@ -37,6 +69,7 @@ setup_tproxy() {
     iptables -t mangle -A VPNBOT_PREROUTE -d 172.16.0.0/12 -j RETURN
     iptables -t mangle -A VPNBOT_PREROUTE -d 192.168.0.0/16 -j RETURN
     iptables -t mangle -A VPNBOT_PREROUTE -d 127.0.0.0/8 -j RETURN
+    add_exclusions iptables VPNBOT_PREROUTE
     iptables -t mangle -A VPNBOT_PREROUTE -m socket -j VPNBOT_DIVERT
     iptables -t mangle -A VPNBOT_PREROUTE -p tcp -j TPROXY \
         --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
@@ -60,6 +93,7 @@ setup_tproxy() {
     ip6tables -t mangle -A VPNBOT_PREROUTE6 -m mark --mark 0x64 -j RETURN
     ip6tables -t mangle -A VPNBOT_PREROUTE6 -d fc00::/7 -j RETURN
     ip6tables -t mangle -A VPNBOT_PREROUTE6 -d ::1/128 -j RETURN
+    add_exclusions ip6tables VPNBOT_PREROUTE6
     ip6tables -t mangle -A VPNBOT_PREROUTE6 -m socket -j VPNBOT_DIVERT6
     ip6tables -t mangle -A VPNBOT_PREROUTE6 -p tcp -j TPROXY \
         --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
@@ -70,6 +104,9 @@ setup_tproxy() {
 }
 
 teardown_tproxy() {
+    echo 1 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null || true
+    echo 1 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null || true
+
     # IPv4
     iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE 2>/dev/null || true
     iptables -t mangle -F VPNBOT_PREROUTE 2>/dev/null || true
@@ -91,18 +128,33 @@ teardown_tproxy() {
 
 prepare_singbox() {
     if [ ! -x "$SINGBOX" ]; then
-        echo "$(date) Unpacking sing-box..." >> $LOGFILE
-        if [ -f "$SINGBOX_GZ" ]; then
+        # Persistent copy at /opt/usr/bin/sing-box (survives reboots)
+        if [ -x /opt/usr/bin/sing-box ]; then
+            cp /opt/usr/bin/sing-box $SINGBOX && chmod +x $SINGBOX
+            echo "$(date) sing-box copied from persistent store" >> $LOGFILE
+        elif [ -f "$SINGBOX_GZ" ]; then
+            echo "$(date) Unpacking sing-box..." >> $LOGFILE
             cd /tmp && tar xzf "$SINGBOX_GZ" && \
                 mv /tmp/sing-box-*/sing-box /tmp/sing-box 2>/dev/null || \
                 mv /tmp/sing-box-* /tmp/sing-box 2>/dev/null
             chmod +x $SINGBOX
         else
-            echo "$(date) ERROR: $SINGBOX_GZ not found" >> $LOGFILE
+            echo "$(date) ERROR: no sing-box binary found" >> $LOGFILE
             return 1
         fi
     fi
     return 0
+}
+
+# Rebuild ONLY the TPROXY iptables rules, without touching sing-box/vpnd.
+# Called by the NDM netfilter.d hook after Keenetic rebuilds netfilter.
+retproxy() {
+    [ -f "$VPND_DIR/token" ] || exit 0
+    pgrep -f "$SINGBOX" > /dev/null 2>&1 || exit 0
+    load_tproxy_modules
+    teardown_tproxy
+    setup_tproxy
+    echo "$(date) TPROXY rules rebuilt (retproxy)" >> $LOGFILE
 }
 
 start() {
@@ -144,8 +196,9 @@ stop() {
 }
 
 case "$1" in
-    start)  start ;;
-    stop)   stop ;;
-    restart) stop; sleep 1; start ;;
-    *)      echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+    start)    start ;;
+    stop)     stop ;;
+    restart)  stop; sleep 1; start ;;
+    retproxy) retproxy ;;
+    *)        echo "Usage: $0 {start|stop|restart|retproxy}"; exit 1 ;;
 esac
