@@ -100,6 +100,9 @@ func (m *Manager) Apply(data []byte) error {
 	// Level 1: hot reload via Clash API.
 	if err := m.reloadLocked(patched); err == nil {
 		m.updateVPSNftset(vpsIPs)
+		if err := m.SetupRouting(); err != nil {
+			m.log.Printf("routing setup after hot reload: %v", err)
+		}
 		return nil
 	}
 
