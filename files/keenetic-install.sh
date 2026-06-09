@@ -106,6 +106,18 @@ cat > /opt/etc/ndm/fs.d/010-entware.sh << 'HOOK'
 HOOK
 chmod +x /opt/etc/ndm/fs.d/010-entware.sh
 
+# netfilter.d hook: NDM rebuilds iptables on every reconfigure (WAN change, reboot,
+# firewall edit) and wipes our custom chains. This restores TPROXY rules each time.
+# NDM passes $type (iptables/ip6tables) and $table (filter/nat/mangle).
+mkdir -p /opt/etc/ndm/netfilter.d
+cat > /opt/etc/ndm/netfilter.d/100-vpnd.sh << 'NFHOOK'
+#!/bin/sh
+[ "$type" = "iptables" ] || exit 0
+[ "$table" = "mangle" ] || exit 0
+[ -x /opt/etc/init.d/S99vpnd ] && /opt/etc/init.d/S99vpnd retproxy
+NFHOOK
+chmod +x /opt/etc/ndm/netfilter.d/100-vpnd.sh
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 
 log ""
