@@ -10,7 +10,8 @@ SINGBOX_CFG=/opt/etc/sing-box/config.json
 LOGFILE=/tmp/vpnd.log
 
 TPROXY_IFACE=br0
-TPROXY_PORT=7893
+TPROXY_PORT=7893   # sing-box tproxy inbound (UDP)
+REDIR_PORT=7894    # sing-box redirect inbound (TCP, via NAT REDIRECT)
 TPROXY_MARK=1
 TPROXY_TABLE=100
 
@@ -28,33 +29,50 @@ load_tproxy_modules() {
     insmod /lib/modules/"$(uname -r)"/xt_TPROXY.ko 2>/dev/null
 }
 
-# Append RETURN rules so excluded traffic skips TPROXY entirely.
-# Must run BEFORE the -m socket / TPROXY rules in the chain.
+# Append RETURN rules so excluded traffic skips interception entirely.
+# Must run BEFORE the REDIRECT / TPROXY jump in the chain.
 #   $1 = iptables binary (iptables | ip6tables)
-#   $2 = chain name (VPNBOT_PREROUTE | VPNBOT_PREROUTE6)
+#   $2 = table (nat | mangle)
+#   $3 = chain name
 add_exclusions() {
-    _ipt="$1"; _chain="$2"
+    _ipt="$1"; _tbl="$2"; _chain="$3"
     for _p in $EXCLUDE_PORTS; do
-        $_ipt -t mangle -A "$_chain" -p tcp --dport "$_p" -j RETURN 2>/dev/null || true
+        $_ipt -t "$_tbl" -A "$_chain" -p tcp --dport "$_p" -j RETURN 2>/dev/null || true
     done
     # Per-device IP excludes are IPv4-only (WARP/secondary-VPN hosts).
     if [ "$_ipt" = "iptables" ] && [ -f "$EXCLUDE_IPS_FILE" ]; then
         while IFS= read -r _ip; do
             case "$_ip" in ''|\#*) continue ;; esac
-            iptables -t mangle -A "$_chain" -s "$_ip" -j RETURN 2>/dev/null || true
+            iptables -t "$_tbl" -A "$_chain" -s "$_ip" -j RETURN 2>/dev/null || true
         done < "$EXCLUDE_IPS_FILE"
     fi
 }
 
 setup_tproxy() {
-    # Disable Keenetic software fast-path so TPROXY intercepts all flows.
-    # Without this, FASTNAT "learns" a flow after first packets and offloads it
-    # around iptables — traffic bypasses the tunnel, provider blocks QUIC → hang.
+    # Mixed mode: TCP via NAT REDIRECT, UDP via TPROXY. The Keenetic kernel forbids
+    # TPROXY spoofed-source replies (sendto EPERM) so pure-TPROXY TCP never SYN-ACKs
+    # clients → phone hangs. REDIRECT uses NAT (no spoofed source) and works.
+    # IPv6 is NOT intercepted: the tunnel is IPv4-only, intercepting v6 black-holes it.
+
+    # Disable Keenetic software fast-path so the first packets reach netfilter and
+    # establish the NAT/TPROXY state instead of being offloaded around it.
     echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null || true
     echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null || true
     conntrack -F 2>/dev/null || true
 
-    # IPv4
+    # ── TCP: NAT REDIRECT → redirect-in (7894) ──────────────────────────────
+    # REDIRECT runs in nat/PREROUTING; sing-box's own outbound is locally generated
+    # (OUTPUT path) so it is never redirected — no self-loop, no mark needed.
+    iptables -t nat -N VPNBOT_REDIR 2>/dev/null || iptables -t nat -F VPNBOT_REDIR
+    iptables -t nat -A VPNBOT_REDIR -d 10.0.0.0/8 -j RETURN
+    iptables -t nat -A VPNBOT_REDIR -d 172.16.0.0/12 -j RETURN
+    iptables -t nat -A VPNBOT_REDIR -d 192.168.0.0/16 -j RETURN
+    iptables -t nat -A VPNBOT_REDIR -d 127.0.0.0/8 -j RETURN
+    add_exclusions iptables nat VPNBOT_REDIR
+    iptables -t nat -A VPNBOT_REDIR -p tcp -j REDIRECT --to-ports $REDIR_PORT
+    iptables -t nat -A PREROUTING -i $TPROXY_IFACE -p tcp -j VPNBOT_REDIR
+
+    # ── UDP: TPROXY → tproxy-in (7893) ──────────────────────────────────────
     ip rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
     ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
 
@@ -62,52 +80,35 @@ setup_tproxy() {
     iptables -t mangle -A VPNBOT_DIVERT -j MARK --set-mark $TPROXY_MARK
     iptables -t mangle -A VPNBOT_DIVERT -j ACCEPT
 
-    # Skip already-marked (sing-box outbound) and private ranges
     iptables -t mangle -N VPNBOT_PREROUTE 2>/dev/null || iptables -t mangle -F VPNBOT_PREROUTE
     iptables -t mangle -A VPNBOT_PREROUTE -m mark --mark 0x64 -j RETURN
     iptables -t mangle -A VPNBOT_PREROUTE -d 10.0.0.0/8 -j RETURN
     iptables -t mangle -A VPNBOT_PREROUTE -d 172.16.0.0/12 -j RETURN
     iptables -t mangle -A VPNBOT_PREROUTE -d 192.168.0.0/16 -j RETURN
     iptables -t mangle -A VPNBOT_PREROUTE -d 127.0.0.0/8 -j RETURN
-    add_exclusions iptables VPNBOT_PREROUTE
+    add_exclusions iptables mangle VPNBOT_PREROUTE
     iptables -t mangle -A VPNBOT_PREROUTE -m socket -j VPNBOT_DIVERT
-    iptables -t mangle -A VPNBOT_PREROUTE -p tcp -j TPROXY \
-        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
     iptables -t mangle -A VPNBOT_PREROUTE -p udp -j TPROXY \
         --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
 
-    iptables -t mangle -A PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE
+    iptables -t mangle -A PREROUTING -i $TPROXY_IFACE -p udp -j VPNBOT_PREROUTE
 
     # MSS clamp — prevents packet drops with Hysteria2/QUIC tunnel overhead
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-
-    # IPv6 — intercept IPv6 traffic from LAN devices (sing-box listens on :::7893)
-    ip -6 rule add fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
-    ip -6 route add local ::/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
-
-    ip6tables -t mangle -N VPNBOT_DIVERT6 2>/dev/null || ip6tables -t mangle -F VPNBOT_DIVERT6
-    ip6tables -t mangle -A VPNBOT_DIVERT6 -j MARK --set-mark $TPROXY_MARK
-    ip6tables -t mangle -A VPNBOT_DIVERT6 -j ACCEPT
-
-    ip6tables -t mangle -N VPNBOT_PREROUTE6 2>/dev/null || ip6tables -t mangle -F VPNBOT_PREROUTE6
-    ip6tables -t mangle -A VPNBOT_PREROUTE6 -m mark --mark 0x64 -j RETURN
-    ip6tables -t mangle -A VPNBOT_PREROUTE6 -d fc00::/7 -j RETURN
-    ip6tables -t mangle -A VPNBOT_PREROUTE6 -d ::1/128 -j RETURN
-    add_exclusions ip6tables VPNBOT_PREROUTE6
-    ip6tables -t mangle -A VPNBOT_PREROUTE6 -m socket -j VPNBOT_DIVERT6
-    ip6tables -t mangle -A VPNBOT_PREROUTE6 -p tcp -j TPROXY \
-        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
-    ip6tables -t mangle -A VPNBOT_PREROUTE6 -p udp -j TPROXY \
-        --tproxy-mark $TPROXY_MARK --on-port $TPROXY_PORT
-
-    ip6tables -t mangle -A PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE6
 }
 
 teardown_tproxy() {
     echo 1 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null || true
     echo 1 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null || true
 
-    # IPv4
+    # TCP REDIRECT (nat)
+    iptables -t nat -D PREROUTING -i $TPROXY_IFACE -p tcp -j VPNBOT_REDIR 2>/dev/null || true
+    iptables -t nat -F VPNBOT_REDIR 2>/dev/null || true
+    iptables -t nat -X VPNBOT_REDIR 2>/dev/null || true
+
+    # UDP TPROXY (mangle)
+    iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -p udp -j VPNBOT_PREROUTE 2>/dev/null || true
+    # Legacy: older versions hooked the chain without -p udp; remove that too.
     iptables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE 2>/dev/null || true
     iptables -t mangle -F VPNBOT_PREROUTE 2>/dev/null || true
     iptables -t mangle -X VPNBOT_PREROUTE 2>/dev/null || true
@@ -116,7 +117,7 @@ teardown_tproxy() {
     ip rule del fwmark $TPROXY_MARK table $TPROXY_TABLE 2>/dev/null || true
     ip route del local 0.0.0.0/0 dev lo table $TPROXY_TABLE 2>/dev/null || true
 
-    # IPv6
+    # Legacy IPv6 interception cleanup (no longer created; tunnel is IPv4-only).
     ip6tables -t mangle -D PREROUTING -i $TPROXY_IFACE -j VPNBOT_PREROUTE6 2>/dev/null || true
     ip6tables -t mangle -F VPNBOT_PREROUTE6 2>/dev/null || true
     ip6tables -t mangle -X VPNBOT_PREROUTE6 2>/dev/null || true

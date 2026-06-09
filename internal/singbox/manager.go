@@ -33,7 +33,8 @@ const (
 	apiTimeout     = 8 * time.Second
 	selectorTag    = "proxy" // outbound selector tag in Marzban-generated sing-box config
 
-	tproxyPort   = 7893    // sing-box TPROXY inbound port
+	tproxyPort   = 7893    // sing-box TPROXY inbound port (UDP)
+	redirectPort = 7894    // sing-box redirect inbound port (TCP, NAT REDIRECT)
 	tproxyFwmark = "0x1"   // fwmark set on packets to intercept
 	tproxyTable  = "100"   // routing table: local 0.0.0.0/0 dev lo
 	bypassFwmark = "0x64"  // sing-box outbound mark → bypasses TPROXY
@@ -707,8 +708,15 @@ func patchRouterConfig(data []byte) ([]byte, []string, error) {
 	route["default_mark"] = 100
 	cfg["route"] = route
 
-	// Replace TUN inbound with TPROXY inbound; extract VPS IPs before replacing.
+	// Replace TUN inbound with mixed-mode inbounds; extract VPS IPs before replacing.
+	// Mixed mode (REDIRECT TCP + TPROXY UDP) mirrors the competitor "spider" and is
+	// REQUIRED on Keenetic: its kernel forbids TPROXY spoofed-source replies (sendto
+	// EPERM) so pure-TPROXY TCP never sends a SYN-ACK to clients. REDIRECT uses NAT
+	// (no spoofed source) for TCP; UDP still needs TPROXY. OpenWrt's nftables path only
+	// redirects TCP to redirect-in / UDP to tproxy-in, so the extra inbound is harmless
+	// there. Both inbound tags are wired into the route rules below.
 	var vpsIPs []string
+	var inboundTags []any
 	if inbounds, ok := cfg["inbounds"].([]any); ok {
 		patched := make([]any, 0, len(inbounds))
 		for _, ib := range inbounds {
@@ -718,15 +726,44 @@ func patchRouterConfig(data []byte) ([]byte, []string, error) {
 				continue
 			}
 			vpsIPs = extractVPSIPs(ibMap)
-			patched = append(patched, map[string]any{
-				"type":        "tproxy",
-				"tag":         "tproxy-in",
-				"listen":      "::",
-				"listen_port": tproxyPort,
-				"udp_timeout": "5m",
-			})
+			patched = append(patched,
+				map[string]any{
+					"type":        "redirect",
+					"tag":         "redirect-in",
+					"listen":      "0.0.0.0",
+					"listen_port": redirectPort,
+				},
+				map[string]any{
+					"type":        "tproxy",
+					"tag":         "tproxy-in",
+					"listen":      "::",
+					"listen_port": tproxyPort,
+					"udp_timeout": "5m",
+				},
+			)
+			inboundTags = []any{"redirect-in", "tproxy-in"}
 		}
 		cfg["inbounds"] = patched
+	}
+
+	// Rewrite route-rule inbound references from the original "tun-in" to our actual
+	// inbounds. Marzban/server configs scope sniff/resolve/hijack-dns to "tun-in";
+	// after the inbound swap that tag no longer exists, so those rules silently never
+	// match → no domain sniffing, no DNS hijack for intercepted traffic.
+	if len(inboundTags) > 0 {
+		if route, ok := cfg["route"].(map[string]any); ok {
+			if rules, ok := route["rules"].([]any); ok {
+				for _, r := range rules {
+					rMap, ok := r.(map[string]any)
+					if !ok {
+						continue
+					}
+					if _, has := rMap["inbound"]; has {
+						rMap["inbound"] = inboundTags
+					}
+				}
+			}
+		}
 	}
 
 	// interrupt_exist_connections: false — prevents killing all LAN clients
