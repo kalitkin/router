@@ -160,6 +160,12 @@ retproxy() {
 start() {
     echo "$(date) Starting vpnd..." >> $LOGFILE
 
+    # Raise file-descriptor limit: sing-box proxies ALL LAN traffic via TPROXY,
+    # each connection costs ~2 FDs and phone QUIC opens them in bursts. The default
+    # 1024 exhausts instantly → "accept4: too many open files" → no SYN-ACK to
+    # clients (phone hangs) and outbound dials fail. Children inherit this limit.
+    ulimit -n 51200 2>/dev/null || ulimit -n 8192 2>/dev/null || true
+
     teardown_tproxy  # clean up stale rules from previous run
     mkdir -p $VPND_DIR /opt/etc/sing-box
 
