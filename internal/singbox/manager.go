@@ -811,6 +811,18 @@ func extractVPSIPs(tunInbound map[string]any) []string {
 		if strings.Contains(s, ":") {
 			continue
 		}
+		// Skip hostnames — nftables cannot resolve names in sets.
+		// isPrivateCIDR returns false for unparseable entries (ip==nil), so we
+		// must validate the IP before calling it.
+		var ip net.IP
+		if strings.Contains(s, "/") {
+			ip, _, _ = net.ParseCIDR(s)
+		} else {
+			ip = net.ParseIP(s)
+		}
+		if ip == nil {
+			continue
+		}
 		if !isPrivateCIDR(s) {
 			ips = append(ips, s)
 		}
