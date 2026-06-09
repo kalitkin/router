@@ -25,6 +25,7 @@ start_service() {
     # GOMEMLIMIT=10MiB — caps Go heap so GC fires before OOM killer does.
     # procd_set_param env not supported on all OpenWrt versions; use env wrapper.
     procd_set_param command /usr/bin/env GOMEMLIMIT=10485760 "$PROG"
+    procd_set_param limits "nofile=51200"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 0
     procd_set_param stderr 1
