@@ -10,10 +10,9 @@ SINGBOX_CFG=/opt/etc/sing-box/config.json
 LOGFILE=/tmp/vpnd.log
 
 TPROXY_IFACE=br0
-TPROXY_PORT=7893   # sing-box tproxy inbound (UDP)
 REDIR_PORT=7894    # sing-box redirect inbound (TCP, via NAT REDIRECT)
-TPROXY_MARK=1
-TPROXY_TABLE=100
+TPROXY_MARK=1      # legacy fwmark (still cleaned up in teardown)
+TPROXY_TABLE=100   # legacy routing table (still cleaned up in teardown)
 
 # Traffic exclusions — never tunneled. Prevents two classes of failure:
 #   1. Admin lockout: tunneling SSH/Telnet can cut remote access mid-change.
