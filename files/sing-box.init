@@ -12,10 +12,12 @@ start_service() {
     [ -f "$CONF" ] || return 0
     mkdir -p /var/lib/sing-box
     procd_open_instance sing-box
-    # /usr/bin/env sets GOMEMLIMIT before exec-ing sing-box.
+    # /usr/bin/env sets env vars before exec-ing sing-box.
     # procd_set_param env is not supported on all OpenWrt versions.
     # GOMEMLIMIT=20MiB caps Go heap so GC fires before OOM killer does.
-    procd_set_param command /usr/bin/env GOMEMLIMIT=20971520 "$PROG" run -c "$CONF"
+    # ENABLE_DEPRECATED_LEGACY_DNS_SERVERS: Marzban configs still use the legacy
+    # DNS server format, which sing-box 1.13 refuses to load (FATAL) without this.
+    procd_set_param command /usr/bin/env GOMEMLIMIT=20971520 ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true "$PROG" run -c "$CONF"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1

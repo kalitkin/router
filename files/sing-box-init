@@ -7,6 +7,12 @@ SINGBOX_GZ=/opt/usr/share/sing-box.tar.gz
 CFG=/opt/etc/sing-box/config.json
 LOG=/tmp/vpnd.log
 
+# Marzban-generated configs still use the legacy DNS server format, which
+# sing-box 1.13 refuses to load (FATAL) unless this flag is set. Without it,
+# every config Apply via `sing-box restart` fails to start and vpnd rolls back
+# to the previous config. Keep it here so both `start` and `restart` set it.
+export ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true
+
 prepare() {
     if [ ! -x "$SINGBOX" ]; then
         if [ -f "$SINGBOX_GZ" ]; then
