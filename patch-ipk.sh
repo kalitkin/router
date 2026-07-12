@@ -94,7 +94,7 @@ OUTPUT="${1:-$SCRIPT_DIR/luci-app-vpnbot_1.3.0-r28_all.ipk}"
 
 PKG_NAME="luci-app-vpnbot"
 PKG_VERSION="1.3.0"
-PKG_RELEASE="28"
+PKG_RELEASE="29"
 
 CDN="https://self-music.online/packages/latest"
 
