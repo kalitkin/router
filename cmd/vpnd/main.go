@@ -64,9 +64,15 @@ func readFile(dir, name string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+var candidateIfaces = []string{"br-lan", "br0", "Bridge0", "eth0", "wan"}
+
 func detectMAC() string {
-	for _, iface := range []string{"br-lan", "br0", "Bridge0", "eth0", "wan"} {
-		data, err := os.ReadFile("/sys/class/net/" + iface + "/address")
+	return detectMACFrom("/sys/class/net", candidateIfaces)
+}
+
+func detectMACFrom(sysClassNet string, ifaces []string) string {
+	for _, iface := range ifaces {
+		data, err := os.ReadFile(sysClassNet + "/" + iface + "/address")
 		if err != nil {
 			continue
 		}
