@@ -72,10 +72,65 @@ func TestFirmwareFrom(t *testing.T) {
 	}
 }
 
-func TestDetectMAC(t *testing.T) {
-	// detectMAC reads real /sys/class/net paths — on a dev machine none of
-	// the router interface names exist, so it must fail closed to "".
-	if got := detectMAC(); got != "" {
-		t.Errorf("detectMAC() on non-router host = %q, want empty", got)
+func TestDetectMACFrom(t *testing.T) {
+	ifaces := []string{"br-lan", "br0", "eth0"}
+
+	tests := []struct {
+		name  string
+		setup func(sysClassNet string)
+		want  string
+	}{
+		{
+			name:  "no interfaces present",
+			setup: func(string) {},
+			want:  "",
+		},
+		{
+			name: "first matching interface wins",
+			setup: func(dir string) {
+				writeIfaceAddr(t, dir, "br-lan", "aa:bb:cc:dd:ee:01")
+				writeIfaceAddr(t, dir, "eth0", "aa:bb:cc:dd:ee:02")
+			},
+			want: "aa:bb:cc:dd:ee:01",
+		},
+		{
+			name: "skips zero MAC and falls through to next candidate",
+			setup: func(dir string) {
+				writeIfaceAddr(t, dir, "br-lan", "00:00:00:00:00:00")
+				writeIfaceAddr(t, dir, "eth0", "aa:bb:cc:dd:ee:02")
+			},
+			want: "aa:bb:cc:dd:ee:02",
+		},
+		{
+			name: "skips empty address file",
+			setup: func(dir string) {
+				writeIfaceAddr(t, dir, "br-lan", "")
+				writeIfaceAddr(t, dir, "eth0", "aa:bb:cc:dd:ee:02")
+			},
+			want: "aa:bb:cc:dd:ee:02",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.setup(dir)
+
+			got := detectMACFrom(dir, ifaces)
+			if got != tt.want {
+				t.Errorf("detectMACFrom() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func writeIfaceAddr(t *testing.T, sysClassNet, iface, addr string) {
+	t.Helper()
+	ifaceDir := filepath.Join(sysClassNet, iface)
+	if err := os.MkdirAll(ifaceDir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", ifaceDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(ifaceDir, "address"), []byte(addr+"\n"), 0644); err != nil {
+		t.Fatalf("write address: %v", err)
 	}
 }
