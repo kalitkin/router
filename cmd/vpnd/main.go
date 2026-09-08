@@ -78,16 +78,45 @@ func detectMAC() string {
 	return ""
 }
 
+const (
+	openwrtReleasePath  = "/etc/openwrt_release"
+	keeneticReleasePath = "/proc/sys/keenetic/release"
+)
+
+// firmware returns the router's firmware version string, or "" if neither
+// platform's version source is present.
 func firmware() string {
-	data, err := os.ReadFile("/etc/openwrt_release")
+	return firmwareFrom(openwrtReleasePath, keeneticReleasePath)
+}
+
+func firmwareFrom(openwrtPath, keeneticPath string) string {
+	if v := openwrtRelease(openwrtPath); v != "" {
+		return v
+	}
+	return keeneticRelease(keeneticPath)
+}
+
+// openwrtRelease parses DISTRIB_RELEASE out of /etc/openwrt_release.
+func openwrtRelease(path string) string {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "DISTRIB_RELEASE=") {
-			v := strings.Trim(strings.TrimPrefix(line, "DISTRIB_RELEASE="), "'\"")
-			return v
+			return strings.Trim(strings.TrimPrefix(line, "DISTRIB_RELEASE="), "'\"")
 		}
 	}
 	return ""
+}
+
+// keeneticRelease reads KeeneticOS's version from /proc/sys/keenetic/release.
+// This needs no admin credentials, unlike the RCI HTTP API — vpnd is never
+// provisioned with the router's admin password.
+func keeneticRelease(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
