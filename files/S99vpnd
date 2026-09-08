@@ -8,6 +8,7 @@ SINGBOX=/tmp/sing-box
 VPND_DIR=/opt/etc/vpn
 SINGBOX_CFG=/opt/etc/sing-box/config.json
 LOGFILE=/tmp/vpnd.log
+LOGFILE_MAX_BYTES=5242880  # 5 MB — /tmp is a small tmpfs shared with sing-box's ~60 MB copy
 
 TPROXY_IFACE=br0
 REDIR_PORT=7894    # sing-box redirect inbound (TCP, via NAT REDIRECT)
@@ -146,11 +147,38 @@ prepare_singbox() {
     return 0
 }
 
-# Rebuild ONLY the TPROXY iptables rules, without touching sing-box/vpnd.
+# sing-box's own stdout/stderr (one line per proxied connection, including
+# every failed direct-outbound dial from LAN P2P traffic) appends to LOGFILE
+# forever. No cron is installed to rotate it, so a router left running for
+# months fills the tmpfs solid — which then breaks every /tmp-dependent
+# operation (OTA downloads, config writes), not just logging. There's no cron
+# to schedule a rotation, so piggyback the size check on this hook instead —
+# NDM already fires it on every netfilter rebuild, which happens often enough
+# in practice (WAN reconnects, DHCP renewals, Wi-Fi changes) to bound growth.
+rotate_log_if_oversized() {
+    [ -f "$LOGFILE" ] || return 0
+    _logsize=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
+    [ "$_logsize" -gt "$LOGFILE_MAX_BYTES" ] || return 1
+    echo "$(date) log ${_logsize}b exceeds ${LOGFILE_MAX_BYTES}b — restarting to reclaim /tmp" >> "$LOGFILE"
+    stop
+    sleep 1
+    # Truncate only after stop(): while vpnd/sing-box still hold LOGFILE open,
+    # even `> $LOGFILE` doesn't free tmpfs space until their fds close — the
+    # old data stays allocated as a deleted-but-open inode. With both dead,
+    # this is a real reset instead of just appending onto the same big file.
+    : > "$LOGFILE"
+    start
+    return 0
+}
+
+# Rebuild ONLY the TPROXY iptables rules, without touching sing-box/vpnd —
+# unless the log has grown past LOGFILE_MAX_BYTES, in which case a full
+# restart runs instead (see rotate_log_if_oversized above).
 # Called by the NDM netfilter.d hook after Keenetic rebuilds netfilter.
 retproxy() {
     [ -f "$VPND_DIR/token" ] || exit 0
     pgrep -f "$SINGBOX" > /dev/null 2>&1 || exit 0
+    rotate_log_if_oversized && return 0
     load_tproxy_modules
     teardown_tproxy
     setup_tproxy
