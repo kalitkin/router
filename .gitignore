@@ -18,3 +18,7 @@ CLAUDE.md
 # Compiled binaries (built locally or downloaded from CDN)
 vpnd-*
 sing-box-*
+
+# competitor analysis artifacts (local, do not commit)
+_spider/
+_competitor-install.sh
