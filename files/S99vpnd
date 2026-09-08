@@ -7,8 +7,17 @@ SINGBOX_GZ=/opt/usr/share/sing-box.tar.gz
 SINGBOX=/tmp/sing-box
 VPND_DIR=/opt/etc/vpn
 SINGBOX_CFG=/opt/etc/sing-box/config.json
-LOGFILE=/tmp/vpnd.log
-LOGFILE_MAX_BYTES=5242880  # 5 MB — /tmp is a small tmpfs shared with sing-box's ~60 MB copy
+
+# vpnd/sing-box log through NDM's own syslog (logger -t ...), not a flat file:
+# sing-box logs one line per proxied connection, including every failed
+# direct-outbound dial from LAN P2P traffic, without bound. A flat file under
+# /tmp (a small tmpfs shared with sing-box's own ~60MB copy) fills solid within
+# weeks and then breaks every /tmp-dependent operation (OTA downloads, config
+# writes), not just logging — found live on the NC-1913 test router (67MB/~3
+# months). Piping through logger avoids the growth problem entirely instead of
+# capping it: NDM's syslog already has its own bounded buffer, so nothing here
+# needs to periodically restart vpnd/sing-box just to reclaim disk space.
+log() { logger -t vpnd-init "$1"; }
 
 TPROXY_IFACE=br0
 REDIR_PORT=7894    # sing-box redirect inbound (TCP, via NAT REDIRECT)
@@ -132,61 +141,34 @@ prepare_singbox() {
         # Persistent copy at /opt/usr/bin/sing-box (survives reboots)
         if [ -x /opt/usr/bin/sing-box ]; then
             cp /opt/usr/bin/sing-box $SINGBOX && chmod +x $SINGBOX
-            echo "$(date) sing-box copied from persistent store" >> $LOGFILE
+            log "sing-box copied from persistent store"
         elif [ -f "$SINGBOX_GZ" ]; then
-            echo "$(date) Unpacking sing-box..." >> $LOGFILE
+            log "Unpacking sing-box..."
             cd /tmp && tar xzf "$SINGBOX_GZ" && \
                 mv /tmp/sing-box-*/sing-box /tmp/sing-box 2>/dev/null || \
                 mv /tmp/sing-box-* /tmp/sing-box 2>/dev/null
             chmod +x $SINGBOX
         else
-            echo "$(date) ERROR: no sing-box binary found" >> $LOGFILE
+            log "ERROR: no sing-box binary found"
             return 1
         fi
     fi
     return 0
 }
 
-# sing-box's own stdout/stderr (one line per proxied connection, including
-# every failed direct-outbound dial from LAN P2P traffic) appends to LOGFILE
-# forever. No cron is installed to rotate it, so a router left running for
-# months fills the tmpfs solid — which then breaks every /tmp-dependent
-# operation (OTA downloads, config writes), not just logging. There's no cron
-# to schedule a rotation, so piggyback the size check on this hook instead —
-# NDM already fires it on every netfilter rebuild, which happens often enough
-# in practice (WAN reconnects, DHCP renewals, Wi-Fi changes) to bound growth.
-rotate_log_if_oversized() {
-    [ -f "$LOGFILE" ] || return 0
-    _logsize=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
-    [ "$_logsize" -gt "$LOGFILE_MAX_BYTES" ] || return 1
-    echo "$(date) log ${_logsize}b exceeds ${LOGFILE_MAX_BYTES}b — restarting to reclaim /tmp" >> "$LOGFILE"
-    stop
-    sleep 1
-    # Truncate only after stop(): while vpnd/sing-box still hold LOGFILE open,
-    # even `> $LOGFILE` doesn't free tmpfs space until their fds close — the
-    # old data stays allocated as a deleted-but-open inode. With both dead,
-    # this is a real reset instead of just appending onto the same big file.
-    : > "$LOGFILE"
-    start
-    return 0
-}
-
-# Rebuild ONLY the TPROXY iptables rules, without touching sing-box/vpnd —
-# unless the log has grown past LOGFILE_MAX_BYTES, in which case a full
-# restart runs instead (see rotate_log_if_oversized above).
+# Rebuild ONLY the TPROXY iptables rules, without touching sing-box/vpnd.
 # Called by the NDM netfilter.d hook after Keenetic rebuilds netfilter.
 retproxy() {
     [ -f "$VPND_DIR/token" ] || exit 0
     pgrep -f "$SINGBOX" > /dev/null 2>&1 || exit 0
-    rotate_log_if_oversized && return 0
     load_tproxy_modules
     teardown_tproxy
     setup_tproxy
-    echo "$(date) TPROXY rules rebuilt (retproxy)" >> $LOGFILE
+    log "TPROXY rules rebuilt (retproxy)"
 }
 
 start() {
-    echo "$(date) Starting vpnd..." >> $LOGFILE
+    log "Starting vpnd..."
 
     # Raise file-descriptor limit: sing-box proxies ALL LAN traffic via TPROXY,
     # each connection costs ~2 FDs and phone QUIC opens them in bursts. The default
@@ -202,30 +184,30 @@ start() {
     load_tproxy_modules
 
     if ! prepare_singbox; then
-        echo "$(date) Failed to prepare sing-box" >> $LOGFILE
+        log "Failed to prepare sing-box"
         return 1
     fi
 
     if [ -f "$SINGBOX_CFG" ]; then
-        $SINGBOX run -c $SINGBOX_CFG >> $LOGFILE 2>&1 &
-        echo "$(date) sing-box started (pid $!)" >> $LOGFILE
+        $SINGBOX run -c $SINGBOX_CFG 2>&1 | logger -t singbox &
+        log "sing-box started"
         # Trigger URLTest immediately so Best Latency selects a server without waiting for traffic
-        (sleep 8 && curl -sf 'http://127.0.0.1:9090/proxies/Best%20Latency/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=8000' >> $LOGFILE 2>&1) &
+        (sleep 8 && curl -sf 'http://127.0.0.1:9090/proxies/Best%20Latency/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=8000' 2>&1 | logger -t vpnd-urltest) &
     else
-        echo "$(date) No sing-box config yet — skipping sing-box start" >> $LOGFILE
+        log "No sing-box config yet — skipping sing-box start"
     fi
 
     if [ -f "$VPND_DIR/token" ]; then
         setup_tproxy
-        $VPND -dir $VPND_DIR >> $LOGFILE 2>&1 &
-        echo "$(date) vpnd started (pid $!)" >> $LOGFILE
+        $VPND -dir $VPND_DIR 2>&1 | logger -t vpnd &
+        log "vpnd started"
     else
-        echo "$(date) No token yet — run vpn-connect.sh to register" >> $LOGFILE
+        log "No token yet — run vpn-connect.sh to register"
     fi
 }
 
 stop() {
-    echo "$(date) Stopping vpnd..." >> $LOGFILE
+    log "Stopping vpnd..."
     teardown_tproxy
     killall vpnd 2>/dev/null || true
     killall sing-box 2>/dev/null || true
