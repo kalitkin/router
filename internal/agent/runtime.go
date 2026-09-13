@@ -33,6 +33,7 @@ type Config struct {
 	MAC      string
 	Firmware string
 	BaseURL  string
+	Version  string // vpnd's own build version, informational (see ota.go)
 }
 
 type Agent struct {
@@ -72,6 +73,12 @@ type Agent struct {
 	// server ping cache (TASK-02): refreshed every pingRefreshInterval
 	lastPings     []api.ServerInfo
 	lastPingAt    time.Time
+
+	// ota state (see ota.go)
+	otaInProgress    bool
+	otaLastVersion   string    // server's update_version we last attempted (dedup key)
+	otaLastAttempt   time.Time
+	heartbeatOKCount int // incremented on every successful heartbeat; used by confirmPendingUpdate to detect the new binary is alive without a channel-lifecycle dance
 
 	// inter-loop signalling
 	forceReconcile chan struct{}
@@ -124,7 +131,9 @@ func (a *Agent) Run() {
 		}(fn)
 	}
 
-	a.log.Printf("started: device=%s mac=%s", a.cfg.DeviceID, a.cfg.MAC)
+	a.confirmPendingUpdate()
+
+	a.log.Printf("started: device=%s mac=%s version=%s", a.cfg.DeviceID, a.cfg.MAC, a.cfg.Version)
 
 	<-sig
 	a.log.Println("shutting down")

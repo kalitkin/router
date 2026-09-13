@@ -85,6 +85,7 @@ func (a *Agent) doHeartbeat(
 	req := api.HeartbeatReq{
 		IP:               localIP(),
 		FirmwareVersion:  a.cfg.Firmware,
+		AgentVersion:     a.cfg.Version,
 		CurrentServer:    currentServer,
 		AvailableServers: availableServers,
 		CommandResult:    toAPIResult(cmdResult),
@@ -131,6 +132,14 @@ func (a *Agent) doHeartbeat(
 		return
 	}
 
+	// A real, accepted heartbeat proves this binary can run: load creds, dial
+	// TLS, authenticate. confirmPendingUpdate watches this counter after an
+	// OTA re-exec instead of a channel, so it works across arbitrarily many
+	// update cycles without needing to recreate anything.
+	a.mu.Lock()
+	a.heartbeatOKCount++
+	a.mu.Unlock()
+
 	// New config from server -> signal reconcile only when URL changed.
 	// Same URL means server has not rotated the subscription — skip the HTTP
 	// fetch. The 5-min reconcile ticker still catches any content changes.
@@ -172,7 +181,7 @@ func (a *Agent) doHeartbeat(
 	}
 
 	if resp.UpdateAvailable {
-		a.log.Printf("heartbeat: OTA available v%s — %s", resp.UpdateVersion, resp.UpdateURL)
+		a.maybeStartUpdate(resp)
 	}
 }
 

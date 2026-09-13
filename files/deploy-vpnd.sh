@@ -31,6 +31,9 @@ install_bin() {
     mkdir -p "$dst"
     cp "$src" "$dst/vpnd"
     chmod 755 "$dst/vpnd"
+    # Sidecar checksum for vpnd's OTA self-update (internal/agent/ota.go):
+    # it fetches "$url.sha256" before ever trusting a downloaded binary.
+    sha256sum "$dst/vpnd" | awk '{print $1}' > "$dst/vpnd.sha256"
     echo "  ✓ $arch  ($(du -sh "$dst/vpnd" | cut -f1))"
 }
 

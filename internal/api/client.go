@@ -51,6 +51,7 @@ type ServerInfo struct {
 type HeartbeatReq struct {
 	IP               string         `json:"ip,omitempty"`
 	FirmwareVersion  string         `json:"firmware_version,omitempty"`
+	AgentVersion     string         `json:"agent_version,omitempty"` // vpnd's own build version — lets the server target OTA per-device instead of blindly advertising update_available to everyone
 	CurrentServer    string         `json:"current_server,omitempty"`
 	AvailableServers []ServerInfo   `json:"available_servers,omitempty"`
 	CommandResult    *CommandResult `json:"command_result,omitempty"`

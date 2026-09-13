@@ -15,9 +15,22 @@ const (
 	defaultBaseURL = "https://self-music.online"
 )
 
+// version is set at build time via -ldflags "-X main.version=..." (see build.sh).
+// It is purely informational (reported to the server, and printed by -version
+// for the OTA smoke test) — the update-skip/confirm logic never compares it
+// against the server's own update_version string, since the two are not
+// guaranteed to share a format.
+var version = "dev"
+
 func main() {
 	dir := flag.String("dir", defaultDir, "credentials directory")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	creds, err := loadCreds(*dir)
 	if err != nil {
@@ -31,6 +44,7 @@ func main() {
 		MAC:      creds.mac,
 		Firmware: firmware(),
 		BaseURL:  defaultBaseURL,
+		Version:  version,
 	}
 
 	agent.New(cfg).Run()
