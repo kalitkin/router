@@ -19,7 +19,9 @@ case "$ACTION" in
         fi
 
         pgrep -x vpnd > /dev/null 2>&1 && VPND=true
-        pgrep -x sing-box > /dev/null 2>&1 && SINGBOX=true
+        # No -x for sing-box: BusyBox pgrep -x matches full cmdline, not comm,
+        # so it never matches "sing-box run -c ..." (see tier3-tproxy Bug 10).
+        pgrep sing-box > /dev/null 2>&1 && SINGBOX=true
 
         json_ok "{\"registered\":$REGISTERED,\"device_id\":\"$DEVICE_ID\",\"vpnd_running\":$VPND,\"singbox_running\":$SINGBOX}"
         ;;
