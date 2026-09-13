@@ -5,13 +5,20 @@
 SINGBOX=/tmp/sing-box
 SINGBOX_GZ=/opt/usr/share/sing-box.tar.gz
 CFG=/opt/etc/sing-box/config.json
-LOG=/tmp/vpnd.log
 
 # Marzban-generated configs still use the legacy DNS server format, which
 # sing-box 1.13 refuses to load (FATAL) unless this flag is set. Without it,
 # every config Apply via `sing-box restart` fails to start and vpnd rolls back
 # to the previous config. Keep it here so both `start` and `restart` set it.
 export ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true
+
+# sing-box output goes through NDM's own syslog (logger -t), not a flat file:
+# a file under /tmp (a small tmpfs shared with sing-box's own ~60MB copy) fills
+# solid within weeks and then breaks every /tmp-dependent operation, not just
+# logging. This script is what vpnd's Manager.restartLocked() actually calls
+# on every restart (memwatch/health-driven, not just boot) — see S99vpnd's own
+# note on the same fix.
+log() { logger -t sing-box-init "$1"; }
 
 prepare() {
     if [ ! -x "$SINGBOX" ]; then
@@ -20,7 +27,7 @@ prepare() {
                 mv /tmp/sing-box-*/sing-box /tmp/sing-box 2>/dev/null
             chmod +x "$SINGBOX"
         else
-            echo "$(date) ERROR: $SINGBOX_GZ not found" >> "$LOG"
+            log "ERROR: $SINGBOX_GZ not found"
             return 1
         fi
     fi
@@ -31,7 +38,7 @@ case "$1" in
     start)
         prepare || exit 1
         if [ -f "$CFG" ]; then
-            "$SINGBOX" run -c "$CFG" >> "$LOG" 2>&1 &
+            "$SINGBOX" run -c "$CFG" 2>&1 | logger -t singbox &
         fi
         ;;
     stop)
@@ -42,7 +49,7 @@ case "$1" in
         sleep 1
         prepare || exit 1
         if [ -f "$CFG" ]; then
-            "$SINGBOX" run -c "$CFG" >> "$LOG" 2>&1 &
+            "$SINGBOX" run -c "$CFG" 2>&1 | logger -t singbox &
         fi
         ;;
     *)
